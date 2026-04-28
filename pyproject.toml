@@ -24,10 +24,10 @@ classifiers = [
 ]
 
 [project.scripts]
-autotax2 = "autotax2.cli:main"
+autotax2 = "src.cli:main"
 
 [tool.setuptools]
-packages = ["autotax2"]
+packages = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
