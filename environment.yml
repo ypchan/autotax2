@@ -1,0 +1,13 @@
+name: autotax2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.9
+  - vsearch>=2.22
+  - seqkit
+  - rich
+  - rich-argparse
+  - pip
+  - pip:
+      - -e .
