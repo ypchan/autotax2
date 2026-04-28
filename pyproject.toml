@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autotax2"
-version = "0.1.0"
-description = "A VSEARCH-based, local-reference workflow inspired by AutoTax for full-length rRNA de novo taxonomy workflows."
+version = "0.1"
+description = "A VSEARCH-based workflow for SILVA-backed rRNA taxonomy and clustering."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["rich>=13", "rich-argparse>=1.4"]
+dependencies = [
+  "rich>=13",
+  "typer>=0.12",
+]
 license = {text = "MIT"}
 authors = [
   {name = "AutoTax2 contributors"}
@@ -25,3 +28,6 @@ autotax2 = "autotax2.cli:main"
 
 [tool.setuptools]
 packages = ["autotax2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

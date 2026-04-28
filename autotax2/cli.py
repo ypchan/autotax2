@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
+from typing import Dict, List, Optional
 
-try:
-    from rich_argparse import RichHelpFormatter
-except Exception:  # pragma: no cover
-    RichHelpFormatter = argparse.HelpFormatter  # type: ignore
+import typer
 
 from .assign import assign_or_create
 from .backbone import insert_backbone
 from .dependencies import check_core_dependencies, check_paths, summarize_checks
 from .intron import detect_introns
-from .logging import info, print_example, progress_context, progress_step, success
+from .logging import print_example, success
 from .overlap import overlap_backbone
 from .prepare import prepare_silva
 from .provenance import annotate_assignments_with_source, provenance_from_uc_levels
@@ -22,8 +19,25 @@ from .utils import ensure_dir, parse_manifest
 from .vsearch import cluster as run_cluster
 from .vsearch import dereplicate, sintax, sort_by_size, usearch_global
 
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
-EXAMPLES = {
+app = typer.Typer(
+    name="autotax2",
+    help="AutoTax2 workflow.",
+    no_args_is_help=True,
+    add_completion=False,
+    context_settings=CONTEXT_SETTINGS,
+    rich_markup_mode="rich",
+)
+
+EXAMPLES: Dict[str, str] = {
+    "check": "autotax2 check --ref-manifest refdatabases/autotax2_ref_manifest.tsv",
+    "prepare-silva": """autotax2 prepare-silva \\
+  --silva-fasta SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz \\
+  --silva-metadata SILVA_138.2_SSURef.full_metadata.gz \\
+  --out refdatabases \\
+  --make-udb \\
+  --threads auto""",
     "detect-intron": """autotax2 detect-intron \\
   --input hifimeta.original.fa \\
   --db refdatabases/SILVA_138.2_SSURef_NR99_tax_silva.udb \\
@@ -43,16 +57,11 @@ EXAMPLES = {
   --out hifimeta_inserted \\
   --threads auto""",
     "overlap-backbone": """autotax2 overlap-backbone \\
-  --assignments ref2/sequence_rank_assignment.tsv ref3/sequence_rank_assignment.tsv hifimeta/sequence_rank_assignment.tsv \\
+  --assignments ref2/sequence_rank_assignment.tsv \\
+  --assignments ref3/sequence_rank_assignment.tsv \\
+  --assignments hifimeta/sequence_rank_assignment.tsv \\
   --labels ref2,ref3,hifimeta \\
   --out ref_overlap""",
-    "check": "autotax2 check --ref-manifest refdatabases/autotax2_ref_manifest.tsv",
-    "prepare-silva": """autotax2 prepare-silva \\
-  --silva-fasta SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz \\
-  --silva-metadata SILVA_138.2_SSURef.full_metadata.gz \\
-  --out refdatabases \\
-  --make-udb \\
-  --threads auto""",
     "derep": "autotax2 derep --input input.fa --out work --sort --threads auto",
     "cluster": "autotax2 cluster --input work/derep_sorted.fa --out clusters --ids 0.99,0.97 --threads auto",
     "classify": "autotax2 classify --input clusters/otu099_centroids.fa --ref-manifest refdatabases/autotax2_ref_manifest.tsv --out classify",
@@ -63,282 +72,397 @@ EXAMPLES = {
 }
 
 
-def add_common_vsearch_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--vsearch", default="vsearch")
-    p.add_argument("--threads", default="auto")
-    p.add_argument("--dry-run", action="store_true")
+def show_example(name: str) -> None:
+    print_example(f"Example: autotax2 {name}", EXAMPLES[name])
 
 
-def add_example_arg(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--example", action="store_true")
-
-
-def maybe_print_example(args: argparse.Namespace, name: str) -> bool:
-    if getattr(args, "example", False):
-        print_example(f"Example: autotax2 {name}", EXAMPLES[name])
-        return True
-    return False
-
-
-def cmd_check(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "check"):
+def require_options(example: bool, **values: object) -> None:
+    if example:
         return
-    ok = check_core_dependencies(args.vsearch)
+    missing = [k.replace("_", "-") for k, v in values.items() if v in (None, "", [])]
+    if missing:
+        raise typer.BadParameter("Missing required option(s): " + ", ".join(f"--{x}" for x in missing))
+
+
+def print_outputs(outputs: Dict[str, object]) -> None:
+    for key, value in outputs.items():
+        typer.echo(f"{key}\t{value}")
+
+
+def parse_id_list(value: str) -> List[float]:
+    try:
+        return [float(x.strip()) for x in value.split(",") if x.strip()]
+    except ValueError as exc:
+        raise typer.BadParameter("--ids must be a comma-separated list of numbers, e.g. 0.99,0.97") from exc
+
+
+@app.command("check", help="Check external dependencies and optional reference files.")
+def check(
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    ref_manifest: Optional[Path] = typer.Option(None, "--ref-manifest", help="Reference manifest from prepare-silva."),
+    source_map: Optional[Path] = typer.Option(None, "--source-map", help="Optional source map file."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("check")
+        return
+    ok = check_core_dependencies(vsearch)
     extra = []
-    if args.ref_manifest:
-        manifest = parse_manifest(args.ref_manifest)
+    if ref_manifest:
+        manifest = parse_manifest(ref_manifest)
         extra.extend([
             ("silva_fasta", manifest.get("silva_fasta", ""), True),
             ("silva_sintax_fasta", manifest.get("silva_sintax_fasta", ""), True),
             ("silva_typestrains_fasta", manifest.get("silva_typestrains_fasta", ""), True),
         ])
-    if args.source_map:
-        extra.append(("source_map", args.source_map, True))
+    if source_map:
+        extra.append(("source_map", source_map, True))
     if extra:
         ok = summarize_checks(check_paths(extra)) and ok
     if not ok:
-        raise SystemExit(1)
+        raise typer.Exit(1)
     success("All required dependency checks passed.")
 
 
-def cmd_detect_intron(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "detect-intron"):
+@app.command("prepare-silva", help="Prepare local SILVA FASTA and metadata files.")
+def prepare_silva_cmd(
+    silva_fasta: Optional[Path] = typer.Option(None, "--silva-fasta", help="Local SILVA FASTA, optionally .gz."),
+    silva_metadata: Optional[Path] = typer.Option(None, "--silva-metadata", help="Local SILVA full_metadata, optionally .gz."),
+    out: Path = typer.Option(Path("refdatabases"), "--out", help="Output directory."),
+    prefix: Optional[str] = typer.Option(None, "--prefix", help="Output prefix."),
+    make_udb: bool = typer.Option(False, "--make-udb", help="Build VSEARCH UDB files."),
+    clean_sequences: bool = typer.Option(True, "--clean-sequences/--no-clean-sequences", help="Clean FASTA before processing."),
+    allowed_bases: str = typer.Option("ACGT", "--allowed-bases", help="Allowed bases after U->T; default drops N and ambiguity codes."),
+    u_to_t: bool = typer.Option(True, "--u-to-t/--no-u-to-t", help="Convert U/u to T before filtering."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Accepted for CLI consistency."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("prepare-silva")
         return
-    outputs = detect_introns(
-        input_fasta=args.input,
-        db=args.db,
-        outdir=args.out,
-        source_label=args.source_label,
-        vsearch=args.vsearch,
-        threads=resolve_threads(args.threads),
-        search_id=args.search_id,
-        rescue_id=args.rescue_id,
-        min_intron_len=args.min_intron_len,
-        min_flank_len=args.min_flank_len,
-        strand=args.strand,
-        maxaccepts=args.maxaccepts,
-        dry_run=args.dry_run,
-    )
-    for k, v in outputs.items():
-        print(f"{k}\t{v}")
-
-
-def cmd_insert_backbone(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "insert-backbone"):
-        return
-    outputs = insert_backbone(
-        input_fasta=args.input,
-        manifest_path=args.silva_manifest,
-        outdir=args.out,
-        source_label=args.source_label,
-        rank_thresholds=args.rank_thresholds,
-        original_fasta=args.original_fasta,
-        version_map_path=args.version_map,
-        db_format=args.db_format,
-        vsearch=args.vsearch,
-        threads=resolve_threads(args.threads),
-        strand=args.strand,
-        maxaccepts=args.maxaccepts,
-        centroid_policy=args.centroid_policy,
-        dry_run=args.dry_run,
-    )
-    for k, v in outputs.items():
-        print(f"{k}\t{v}")
-
-
-def cmd_overlap_backbone(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "overlap-backbone"):
-        return
-    labels = [x.strip() for x in args.labels.split(",") if x.strip()]
-    outputs = overlap_backbone(args.assignments, labels, args.out)
-    for k, v in outputs.items():
-        print(f"{k}\t{v}")
-
-
-def cmd_prepare_silva(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "prepare-silva"):
-        return
+    require_options(False, silva_fasta=silva_fasta, silva_metadata=silva_metadata)
+    resolve_threads(threads)
     entries = prepare_silva(
-        silva_fasta=args.silva_fasta,
-        silva_metadata=args.silva_metadata,
-        outdir=args.out,
-        prefix=args.prefix,
-        make_udb_files=args.make_udb,
-        vsearch=args.vsearch,
-        dry_run=args.dry_run,
+        silva_fasta=silva_fasta,
+        silva_metadata=silva_metadata,
+        outdir=out,
+        prefix=prefix,
+        make_udb_files=make_udb,
+        vsearch=vsearch,
+        dry_run=dry_run,
+        clean_sequences=clean_sequences,
+        allowed_bases=allowed_bases,
+        convert_u_to_t=u_to_t,
     )
-    for k, v in entries.items():
-        print(f"{k}\t{v}")
+    print_outputs(entries)
 
 
-def cmd_derep(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "derep"):
+@app.command("detect-intron", help="Detect intron-like insertions and write analysis FASTA files.")
+def detect_intron(
+    input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
+    db: Optional[Path] = typer.Option(None, "--db", help="SILVA FASTA or UDB database."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    source_label: Optional[str] = typer.Option(None, "--source-label", help="Dataset label."),
+    search_id: float = typer.Option(0.70, "--search-id", help="Initial low-stringency identity."),
+    rescue_id: float = typer.Option(0.987, "--rescue-id", help="Rescue identity after intron removal."),
+    min_intron_len: int = typer.Option(50, "--min-intron-len", help="Minimum intron length."),
+    min_flank_len: int = typer.Option(150, "--min-flank-len", help="Minimum aligned flank length."),
+    maxaccepts: int = typer.Option(1, "--maxaccepts", help="VSEARCH maxaccepts."),
+    strand: str = typer.Option("both", "--strand", help="VSEARCH strand: both or plus."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("detect-intron")
         return
-    threads = resolve_threads(args.threads)
-    derep = dereplicate(args.input, args.out, args.vsearch, threads, args.dry_run)
-    if args.sort:
-        print(sort_by_size(derep, args.out, args.vsearch, args.minsize, args.dry_run))
-    else:
-        print(derep)
+    require_options(False, input=input, db=db, out=out)
+    outputs = detect_introns(
+        input_fasta=input,
+        db=db,
+        outdir=out,
+        source_label=source_label,
+        vsearch=vsearch,
+        threads=resolve_threads(threads),
+        search_id=search_id,
+        rescue_id=rescue_id,
+        min_intron_len=min_intron_len,
+        min_flank_len=min_flank_len,
+        strand=strand,
+        maxaccepts=maxaccepts,
+        dry_run=dry_run,
+    )
+    print_outputs(outputs)
 
 
-def parse_id_list(value: str) -> list[float]:
-    return [float(x.strip()) for x in value.split(",") if x.strip()]
-
-
-def cmd_cluster(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "cluster"):
+@app.command("insert-backbone", help="Insert extension sequences into the SILVA backbone.")
+def insert_backbone_cmd(
+    input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
+    silva_manifest: Optional[Path] = typer.Option(None, "--silva-manifest", help="Reference manifest from prepare-silva."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    source_label: Optional[str] = typer.Option(None, "--source-label", help="Dataset label."),
+    original_fasta: Optional[Path] = typer.Option(None, "--original-fasta", help="Original FASTA for centroid output."),
+    version_map: Optional[Path] = typer.Option(None, "--version-map", help="Analysis-to-original map."),
+    rank_thresholds: str = typer.Option("default", "--rank-thresholds", help="Rank threshold preset or custom spec."),
+    db_format: str = typer.Option("auto", "--db-format", help="auto, udb, or fasta."),
+    maxaccepts: int = typer.Option(1, "--maxaccepts", help="VSEARCH maxaccepts."),
+    strand: str = typer.Option("both", "--strand", help="VSEARCH strand: both or plus."),
+    centroid_policy: str = typer.Option("original_seed", "--centroid-policy", help="original_seed or prefer_non_intron."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("insert-backbone")
         return
-    threads = resolve_threads(args.threads)
-    for identity in parse_id_list(args.ids):
-        result = run_cluster(args.input, args.out, identity, args.method, args.vsearch, threads, args.relabel, args.dry_run)
-        print(f"{identity}\t{result['centroids']}\t{result['uc']}")
+    require_options(False, input=input, silva_manifest=silva_manifest, out=out, source_label=source_label)
+    outputs = insert_backbone(
+        input_fasta=input,
+        manifest_path=silva_manifest,
+        outdir=out,
+        source_label=source_label,
+        rank_thresholds=rank_thresholds,
+        original_fasta=original_fasta,
+        version_map_path=version_map,
+        db_format=db_format,
+        vsearch=vsearch,
+        threads=resolve_threads(threads),
+        strand=strand,
+        maxaccepts=maxaccepts,
+        centroid_policy=centroid_policy,
+        dry_run=dry_run,
+    )
+    print_outputs(outputs)
 
 
-def cmd_classify(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "classify"):
+@app.command("overlap-backbone", help="Summarize taxon overlap across backbone assignment files.")
+def overlap_backbone_cmd(
+    assignments: Optional[List[Path]] = typer.Option(None, "--assignments", help="One or more assignment files."),
+    labels: Optional[str] = typer.Option(None, "--labels", help="Comma-separated labels matching --assignments."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("overlap-backbone")
         return
-    threads = resolve_threads(args.threads)
-    manifest = parse_manifest(args.ref_manifest) if args.ref_manifest else {}
-    silva_fasta = args.silva_fasta or manifest.get("silva_fasta")
-    silva_sintax = args.silva_sintax or manifest.get("silva_sintax_fasta")
-    typestrains = args.typestrains or manifest.get("silva_typestrains_fasta")
-    if not silva_fasta or not silva_sintax or not typestrains:
-        raise SystemExit("Missing reference files. Use --ref-manifest or explicit reference paths.")
-    ensure_dir(args.out)
-    sintax_tsv = sintax(args.input, silva_sintax, args.out, args.sintax_cutoff, args.vsearch, threads, args.dry_run)
-    silva = usearch_global(args.input, silva_fasta, args.out, "silva_hits", args.min_id, args.maxaccepts, args.strand, args.vsearch, threads, False, args.dry_run)
-    typehit = usearch_global(args.input, typestrains, args.out, "typestrain_hits", args.min_id, args.maxaccepts, args.strand, args.vsearch, threads, False, args.dry_run)
-    summary = str(Path(args.out) / "taxonomy_summary.tsv")
-    if not args.dry_run:
+    require_options(False, assignments=assignments, labels=labels, out=out)
+    parsed_labels = [x.strip() for x in labels.split(",") if x.strip()]
+    outputs = overlap_backbone(assignments, parsed_labels, out)
+    print_outputs(outputs)
+
+
+@app.command("derep", help="Run VSEARCH dereplication.")
+def derep_cmd(
+    input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    sort: bool = typer.Option(False, "--sort", help="Also run sortbysize."),
+    minsize: Optional[int] = typer.Option(None, "--minsize", help="Minimum size for sortbysize."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("derep")
+        return
+    require_options(False, input=input, out=out)
+    t = resolve_threads(threads)
+    derep = dereplicate(input, out, vsearch, t, dry_run)
+    typer.echo(sort_by_size(derep, out, vsearch, minsize, dry_run) if sort else derep)
+
+
+@app.command("cluster", help="Run VSEARCH clustering at one or more identity levels.")
+def cluster_cmd(
+    input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    ids: str = typer.Option("0.99,0.97,0.95,0.90", "--ids", help="Comma-separated identity thresholds."),
+    method: str = typer.Option("cluster_size", "--method", help="cluster_size, cluster_fast, or cluster_smallmem."),
+    relabel: Optional[str] = typer.Option(None, "--relabel", help="Optional centroid relabel prefix."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("cluster")
+        return
+    require_options(False, input=input, out=out)
+    t = resolve_threads(threads)
+    for identity in parse_id_list(ids):
+        result = run_cluster(input, out, identity, method, vsearch, t, relabel, dry_run)
+        typer.echo(f"{identity}\t{result['centroids']}\t{result['uc']}")
+
+
+@app.command("classify", help="Classify representative sequences using SINTAX plus SILVA/type-strain hits.")
+def classify_cmd(
+    input: Optional[Path] = typer.Option(None, "--input", help="Representative FASTA."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    ref_manifest: Optional[Path] = typer.Option(None, "--ref-manifest", help="Reference manifest."),
+    silva_fasta: Optional[Path] = typer.Option(None, "--silva-fasta", help="SILVA FASTA override."),
+    silva_sintax: Optional[Path] = typer.Option(None, "--silva-sintax", help="SILVA SINTAX FASTA override."),
+    typestrains: Optional[Path] = typer.Option(None, "--typestrains", help="Type strain FASTA override."),
+    sintax_cutoff: float = typer.Option(0.8, "--sintax-cutoff", help="VSEARCH SINTAX cutoff."),
+    min_id: float = typer.Option(0.70, "--min-id", help="Minimum identity for global searches."),
+    maxaccepts: int = typer.Option(10, "--maxaccepts", help="VSEARCH maxaccepts."),
+    strand: str = typer.Option("both", "--strand", help="VSEARCH strand: both or plus."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("classify")
+        return
+    require_options(False, input=input, out=out)
+    t = resolve_threads(threads)
+    manifest = parse_manifest(ref_manifest) if ref_manifest else {}
+    sf = silva_fasta or manifest.get("silva_fasta")
+    ss = silva_sintax or manifest.get("silva_sintax_fasta")
+    ts = typestrains or manifest.get("silva_typestrains_fasta")
+    if not sf or not ss or not ts:
+        raise typer.BadParameter("Missing reference files. Use --ref-manifest or explicit reference paths.")
+    ensure_dir(out)
+    sintax_tsv = sintax(input, ss, out, sintax_cutoff, vsearch, t, dry_run)
+    silva = usearch_global(input, sf, out, "silva_hits", min_id, maxaccepts, strand, vsearch, t, False, dry_run)
+    typehit = usearch_global(input, ts, out, "typestrain_hits", min_id, maxaccepts, strand, vsearch, t, False, dry_run)
+    summary = str(Path(out) / "taxonomy_summary.tsv")
+    if not dry_run:
         summarize(sintax_tsv, silva["userout"], typehit["userout"], summary)
-    print(f"summary\t{summary}")
+    typer.echo(f"summary\t{summary}")
 
 
-def cmd_assign(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "assign"):
+@app.command("assign", help="Assign new sequences to old centroids or create new clusters.")
+def assign_cmd(
+    new: Optional[Path] = typer.Option(None, "--new", help="New FASTA."),
+    old_centroids: Optional[Path] = typer.Option(None, "--old-centroids", help="Existing centroid FASTA."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    id: Optional[float] = typer.Option(None, "--id", help="Assignment identity threshold."),
+    method: str = typer.Option("cluster_size", "--method", help="cluster_size, cluster_fast, or cluster_smallmem."),
+    new_cluster_prefix: str = typer.Option("new_", "--new-cluster-prefix", help="Prefix for new clusters."),
+    source_map: Optional[Path] = typer.Option(None, "--source-map", help="Optional source map."),
+    maxaccepts: int = typer.Option(1, "--maxaccepts", help="VSEARCH maxaccepts."),
+    strand: str = typer.Option("both", "--strand", help="VSEARCH strand: both or plus."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("assign")
         return
-    outputs = assign_or_create(args.new, args.old_centroids, args.out, args.id, args.vsearch, resolve_threads(args.threads), args.strand, args.new_cluster_prefix, args.method, args.maxaccepts, args.dry_run)
-    if args.source_map and not args.dry_run:
-        annotated = str(Path(args.out) / "assignments_with_source.tsv")
-        annotate_assignments_with_source(outputs["assignments"], args.source_map, annotated)
+    require_options(False, new=new, old_centroids=old_centroids, out=out, id=id)
+    outputs = assign_or_create(new, old_centroids, out, id, vsearch, resolve_threads(threads), strand, new_cluster_prefix, method, maxaccepts, dry_run)
+    if source_map and not dry_run:
+        annotated = str(Path(out) / "assignments_with_source.tsv")
+        annotate_assignments_with_source(outputs["assignments"], source_map, annotated)
         outputs["assignments_with_source"] = annotated
-    for k, v in outputs.items():
-        print(f"{k}\t{v}")
+    print_outputs(outputs)
 
 
-def cmd_provenance(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "provenance"):
+@app.command("provenance", help="Summarize source composition from UC clustering levels.")
+def provenance_cmd(
+    source_map: Optional[Path] = typer.Option(None, "--source-map", help="TSV mapping sequence IDs to sources."),
+    derep_uc: Optional[Path] = typer.Option(None, "--derep-uc", help="Dereplication UC file."),
+    level_uc: Optional[List[Path]] = typer.Option(None, "--level-uc", help="One or more cluster-level UC files."),
+    level_labels: Optional[str] = typer.Option(None, "--level-labels", help="Comma-separated labels for --level-uc."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("provenance")
         return
-    labels = [x.strip() for x in args.level_labels.split(",")] if args.level_labels else None
-    outputs = provenance_from_uc_levels(args.source_map, args.derep_uc, args.level_uc, args.out, labels)
-    for k, v in outputs.items():
-        print(f"{k}\t{v}")
+    require_options(False, source_map=source_map, derep_uc=derep_uc, level_uc=level_uc, out=out)
+    labels = [x.strip() for x in level_labels.split(",")] if level_labels else None
+    outputs = provenance_from_uc_levels(source_map, derep_uc, level_uc, out, labels)
+    print_outputs(outputs)
 
 
-def cmd_summarize(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "summarize"):
+@app.command("summarize", help="Summarize existing classify outputs.")
+def summarize_cmd(
+    sintax_file: Optional[Path] = typer.Option(None, "--sintax", help="SINTAX output TSV."),
+    silva_hits: Optional[Path] = typer.Option(None, "--silva-hits", help="SILVA hits table."),
+    typestrain_hits: Optional[Path] = typer.Option(None, "--typestrain-hits", help="Type strain hits table."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output TSV."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("summarize")
         return
-    summarize(args.sintax, args.silva_hits, args.typestrain_hits, args.out)
-    print(args.out)
+    require_options(False, sintax=sintax_file, silva_hits=silva_hits, typestrain_hits=typestrain_hits, out=out)
+    summarize(sintax_file, silva_hits, typestrain_hits, out)
+    typer.echo(out)
 
 
-def cmd_run(args: argparse.Namespace) -> None:
-    if maybe_print_example(args, "run"):
+@app.command("run", help="Run dereplication, clustering and classification in one workflow.")
+def run_cmd(
+    input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
+    ref_manifest: Optional[Path] = typer.Option(None, "--ref-manifest", help="Reference manifest."),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output project directory."),
+    source_map: Optional[Path] = typer.Option(None, "--source-map", help="Optional source map."),
+    ids: str = typer.Option("0.99,0.97,0.95,0.90", "--ids", help="Comma-separated identity thresholds."),
+    classify_id: float = typer.Option(0.99, "--classify-id", help="Identity level to classify."),
+    method: str = typer.Option("cluster_size", "--method", help="cluster_size, cluster_fast, or cluster_smallmem."),
+    minsize: Optional[int] = typer.Option(None, "--minsize", help="Minimum abundance for sortbysize."),
+    sintax_cutoff: float = typer.Option(0.8, "--sintax-cutoff", help="VSEARCH SINTAX cutoff."),
+    min_id: float = typer.Option(0.70, "--min-id", help="Minimum identity for global searches."),
+    maxaccepts: int = typer.Option(10, "--maxaccepts", help="VSEARCH maxaccepts."),
+    strand: str = typer.Option("both", "--strand", help="VSEARCH strand: both or plus."),
+    vsearch: str = typer.Option("vsearch", help="Path to VSEARCH."),
+    threads: str = typer.Option("auto", help="Thread count or auto."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print external commands without running them."),
+    example: bool = typer.Option(False, "--example", help="Print an example command and exit."),
+) -> None:
+    if example:
+        show_example("run")
         return
-    threads = resolve_threads(args.threads)
-    out = Path(args.out)
-    work = out / "work"
-    clusters = out / "clusters"
-    classify_dir = out / "classify"
+    require_options(False, input=input, ref_manifest=ref_manifest, out=out)
+    t = resolve_threads(threads)
+    out_path = Path(out)
+    work = out_path / "work"
+    clusters = out_path / "clusters"
+    classify_dir = out_path / "classify"
     ensure_dir(work); ensure_dir(clusters); ensure_dir(classify_dir)
-    derep = dereplicate(args.input, str(work), args.vsearch, threads, args.dry_run)
-    sorted_fa = sort_by_size(derep, str(work), args.vsearch, args.minsize, args.dry_run)
+
+    derep = dereplicate(input, str(work), vsearch, t, dry_run)
+    sorted_fa = sort_by_size(derep, str(work), vsearch, minsize, dry_run)
+    parsed_ids = parse_id_list(ids)
     chosen = None
-    for identity in parse_id_list(args.ids):
-        result = run_cluster(sorted_fa, str(clusters), identity, args.method, args.vsearch, threads, None, args.dry_run)
-        if abs(identity - args.classify_id) < 1e-9:
+    for identity in parsed_ids:
+        result = run_cluster(sorted_fa, str(clusters), identity, method, vsearch, t, None, dry_run)
+        if abs(identity - classify_id) < 1e-9:
             chosen = result["centroids"]
-    chosen = chosen or str(clusters / f"otu{str(parse_id_list(args.ids)[0]).replace('.', '')}_centroids.fa")
-    class_args = argparse.Namespace(input=chosen, out=str(classify_dir), ref_manifest=args.ref_manifest, silva_fasta=None, silva_sintax=None, typestrains=None, sintax_cutoff=args.sintax_cutoff, min_id=args.min_id, maxaccepts=args.maxaccepts, strand=args.strand, vsearch=args.vsearch, threads=str(threads), dry_run=args.dry_run, example=False)
-    cmd_classify(class_args)
-    success(f"AutoTax2 run finished: {out}")
+    if chosen is None:
+        first = parsed_ids[0]
+        chosen = str(clusters / f"otu{str(first).replace('.', '')}_centroids.fa")
+        typer.echo(f"[autotax2] --classify-id not in --ids; classifying first level {first}")
 
+    manifest = parse_manifest(ref_manifest)
+    sf = manifest.get("silva_fasta")
+    ss = manifest.get("silva_sintax_fasta")
+    ts = manifest.get("silva_typestrains_fasta")
+    if not sf or not ss or not ts:
+        raise typer.BadParameter("Reference manifest is missing silva_fasta, silva_sintax_fasta, or silva_typestrains_fasta.")
 
-def require_args(args: argparse.Namespace, names: list[str]) -> None:
-    if getattr(args, "example", False):
-        return
-    missing = [n for n in names if getattr(args, n.replace("-", "_"), None) in (None, "")]
-    if missing:
-        raise SystemExit(f"Missing required arguments: {', '.join('--' + x for x in missing)}")
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="autotax2", description="AutoTax2 workflow.", formatter_class=RichHelpFormatter)
-    sub = p.add_subparsers(dest="cmd", required=True)
-
-    pcx = sub.add_parser("check", formatter_class=RichHelpFormatter)
-    pcx.add_argument("--vsearch", default="vsearch"); pcx.add_argument("--ref-manifest", default=None); pcx.add_argument("--source-map", default=None); add_example_arg(pcx); pcx.set_defaults(func=cmd_check)
-
-    pdi = sub.add_parser("detect-intron", formatter_class=RichHelpFormatter)
-    pdi.add_argument("--input", required=False); pdi.add_argument("--db", required=False); pdi.add_argument("--out", required=False)
-    pdi.add_argument("--source-label", default="query"); pdi.add_argument("--search-id", type=float, default=0.70); pdi.add_argument("--rescue-id", type=float, default=0.987)
-    pdi.add_argument("--min-intron-len", type=int, default=50); pdi.add_argument("--min-flank-len", type=int, default=150); pdi.add_argument("--maxaccepts", type=int, default=1); pdi.add_argument("--strand", default="both", choices=["both", "plus"])
-    add_common_vsearch_args(pdi); add_example_arg(pdi); pdi.set_defaults(func=cmd_detect_intron)
-
-    pib = sub.add_parser("insert-backbone", formatter_class=RichHelpFormatter)
-    pib.add_argument("--input", required=False); pib.add_argument("--original-fasta", default=None); pib.add_argument("--version-map", default=None); pib.add_argument("--source-label", required=False); pib.add_argument("--silva-manifest", required=False); pib.add_argument("--rank-thresholds", default="default"); pib.add_argument("--db-format", default="auto", choices=["auto", "udb", "fasta"]); pib.add_argument("--maxaccepts", type=int, default=1); pib.add_argument("--strand", default="both", choices=["both", "plus"]); pib.add_argument("--centroid-policy", default="original_seed", choices=["original_seed", "prefer_non_intron"]); pib.add_argument("--out", required=False)
-    add_common_vsearch_args(pib); add_example_arg(pib); pib.set_defaults(func=cmd_insert_backbone)
-
-    pob = sub.add_parser("overlap-backbone", formatter_class=RichHelpFormatter)
-    pob.add_argument("--assignments", nargs="+", required=False); pob.add_argument("--labels", required=False); pob.add_argument("--out", required=False); add_example_arg(pob); pob.set_defaults(func=cmd_overlap_backbone)
-
-    ps = sub.add_parser("prepare-silva", formatter_class=RichHelpFormatter)
-    ps.add_argument("--silva-fasta", required=False); ps.add_argument("--silva-metadata", required=False); ps.add_argument("--out", default="refdatabases"); ps.add_argument("--prefix", default=None); ps.add_argument("--make-udb", action="store_true"); add_common_vsearch_args(ps); add_example_arg(ps); ps.set_defaults(func=cmd_prepare_silva)
-
-    pd = sub.add_parser("derep", formatter_class=RichHelpFormatter)
-    pd.add_argument("--input", required=False); pd.add_argument("--out", required=False); pd.add_argument("--sort", action="store_true"); pd.add_argument("--minsize", type=int, default=None); add_common_vsearch_args(pd); add_example_arg(pd); pd.set_defaults(func=cmd_derep)
-
-    pc = sub.add_parser("cluster", formatter_class=RichHelpFormatter)
-    pc.add_argument("--input", required=False); pc.add_argument("--out", required=False); pc.add_argument("--ids", default="0.99,0.97,0.95,0.90"); pc.add_argument("--method", default="cluster_size", choices=["cluster_size", "cluster_fast", "cluster_smallmem"]); pc.add_argument("--relabel", default=None); add_common_vsearch_args(pc); add_example_arg(pc); pc.set_defaults(func=cmd_cluster)
-
-    pcl = sub.add_parser("classify", formatter_class=RichHelpFormatter)
-    pcl.add_argument("--input", required=False); pcl.add_argument("--out", required=False); pcl.add_argument("--ref-manifest", default=None); pcl.add_argument("--silva-fasta", default=None); pcl.add_argument("--silva-sintax", default=None); pcl.add_argument("--typestrains", default=None); pcl.add_argument("--sintax-cutoff", type=float, default=0.8); pcl.add_argument("--min-id", type=float, default=0.70); pcl.add_argument("--maxaccepts", type=int, default=10); pcl.add_argument("--strand", default="both", choices=["both", "plus"]); add_common_vsearch_args(pcl); add_example_arg(pcl); pcl.set_defaults(func=cmd_classify)
-
-    pa = sub.add_parser("assign", formatter_class=RichHelpFormatter)
-    pa.add_argument("--new", required=False); pa.add_argument("--old-centroids", required=False); pa.add_argument("--out", required=False); pa.add_argument("--id", type=float, required=False); pa.add_argument("--method", default="cluster_size", choices=["cluster_size", "cluster_fast", "cluster_smallmem"]); pa.add_argument("--new-cluster-prefix", default="new_"); pa.add_argument("--source-map", default=None); pa.add_argument("--maxaccepts", type=int, default=1); pa.add_argument("--strand", default="both", choices=["both", "plus"]); add_common_vsearch_args(pa); add_example_arg(pa); pa.set_defaults(func=cmd_assign)
-
-    pp = sub.add_parser("provenance", formatter_class=RichHelpFormatter)
-    pp.add_argument("--source-map", required=False); pp.add_argument("--derep-uc", required=False); pp.add_argument("--level-uc", required=False, nargs="+"); pp.add_argument("--level-labels", default=None); pp.add_argument("--out", required=False); add_example_arg(pp); pp.set_defaults(func=cmd_provenance)
-
-    psu = sub.add_parser("summarize", formatter_class=RichHelpFormatter)
-    psu.add_argument("--sintax", required=False); psu.add_argument("--silva-hits", required=False); psu.add_argument("--typestrain-hits", required=False); psu.add_argument("--out", required=False); add_example_arg(psu); psu.set_defaults(func=cmd_summarize)
-
-    pr = sub.add_parser("run", formatter_class=RichHelpFormatter)
-    pr.add_argument("--input", required=False); pr.add_argument("--ref-manifest", required=False); pr.add_argument("--source-map", default=None); pr.add_argument("--out", required=False); pr.add_argument("--ids", default="0.99,0.97,0.95,0.90"); pr.add_argument("--classify-id", type=float, default=0.99); pr.add_argument("--method", default="cluster_size", choices=["cluster_size", "cluster_fast", "cluster_smallmem"]); pr.add_argument("--minsize", type=int, default=None); pr.add_argument("--sintax-cutoff", type=float, default=0.8); pr.add_argument("--min-id", type=float, default=0.70); pr.add_argument("--maxaccepts", type=int, default=10); pr.add_argument("--strand", default="both", choices=["both", "plus"]); add_common_vsearch_args(pr); add_example_arg(pr); pr.set_defaults(func=cmd_run)
-
-    return p
+    sintax_tsv = sintax(chosen, ss, str(classify_dir), sintax_cutoff, vsearch, t, dry_run)
+    silva = usearch_global(chosen, sf, str(classify_dir), "silva_hits", min_id, maxaccepts, strand, vsearch, t, False, dry_run)
+    typehit = usearch_global(chosen, ts, str(classify_dir), "typestrain_hits", min_id, maxaccepts, strand, vsearch, t, False, dry_run)
+    summary = str(classify_dir / "taxonomy_summary.tsv")
+    if not dry_run:
+        summarize(sintax_tsv, silva["userout"], typehit["userout"], summary)
+        if source_map:
+            level_ucs = [str(clusters / f"otu{str(x).replace('.', '')}.uc") for x in parsed_ids]
+            level_labels = [str(x) for x in parsed_ids]
+            provenance_from_uc_levels(source_map, str(work / "derep.uc"), level_ucs, str(out_path / "provenance"), level_labels)
+    typer.echo(f"summary\t{summary}")
+    success(f"AutoTax2 run finished: {out_path}")
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
-    requirements = {
-        "detect-intron": ["input", "db", "out"],
-        "insert-backbone": ["input", "source-label", "silva-manifest", "out"],
-        "overlap-backbone": ["assignments", "labels", "out"],
-        "prepare-silva": ["silva-fasta", "silva-metadata"],
-        "derep": ["input", "out"],
-        "cluster": ["input", "out"],
-        "classify": ["input", "out"],
-        "assign": ["new", "old-centroids", "out", "id"],
-        "provenance": ["source-map", "derep-uc", "level-uc", "out"],
-        "summarize": ["sintax", "silva-hits", "typestrain-hits", "out"],
-        "run": ["input", "ref-manifest", "out"],
-    }
-    if args.cmd in requirements:
-        require_args(args, requirements[args.cmd])
-    args.func(args)
+    app()
 
 
 if __name__ == "__main__":
