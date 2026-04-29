@@ -1,4 +1,4 @@
-from autotax2.ranks import parse_rank_thresholds, rank_taxon_id
+from src.ranks import parse_rank_thresholds, rank_taxon_id
 
 def test_default_thresholds():
     r = parse_rank_thresholds('default')

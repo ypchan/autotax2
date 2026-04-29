@@ -1,10 +1,10 @@
-# AutoTax2
+# 🧬 AutoTax2
 
-AutoTax2 is a VSEARCH-based workflow for SILVA-backed rRNA sequence processing, taxonomy assignment, rank-wise clustering, reference extension, and source-overlap analysis.
+AutoTax2 is a vsearch-based workflow for SILVA-backed SSU rRNA sequence processing, taxonomy assignment, rank-wise clustering, reference extension, and source-overlap analysis.
 
-Version: `0.1`
+**Version:** `0.1`
 
-## Design goals
+## 🎯 Design goals
 
 AutoTax2 is designed around a fixed SILVA backbone.
 
@@ -15,18 +15,33 @@ AutoTax2 is designed around a fixed SILVA backbone.
 5. VSEARCH performs the search and clustering work; Python handles file preparation, metadata parsing, workflow logic, and result summaries.
 6. AutoTax2 does not download SILVA automatically. Users provide local SILVA FASTA and metadata files.
 
-## Installation
+
+# 📚 Table of Contents
+- [📦 1. Installation](#-1-installation)
+- [📋 2. Command overview](#-2-command-overview)
+- [🗄️ 3. Prepare SILVA](#️-3-prepare-silva)
+- [🔍 4. Optional intron detection](#-4-optional-intron-detection)
+- [🔗 5. Insert sequences into the SILVA backbone](#-5-insert-sequences-into-the-silva-backbone)
+- [📊 6. Multi-reference overlap](#-6-multi-reference-overlap)
+- [⚙️ 7. Classic helper workflow](#️-7-classic-helper-workflow)
+- [📝 8. Input requirements](#-8-input-requirements)
+- [🛠️ 9. Development](#️-9-development)
+
+
+
+
+## 📦 1. Installation
 
 AutoTax2 is a Python package. Install it into an existing Python environment.
 
 ```bash
-python -m pip install -U pip
+gh repo clone ypchan/autotax2
 python -m pip install -e .
 ```
 
 VSEARCH must be available on `PATH`, or you must provide its path with `--vsearch`.
 
-Check the installation:
+**Check the installation:**
 
 ```bash
 autotax2 --help
@@ -34,28 +49,28 @@ autotax2 check
 vsearch --version
 ```
 
-## Command overview
+## 📋 2. Command overview
 
 ```bash
 autotax2 --help
 ```
 
-Commands:
+**Available commands:**
 
-```text
-check              Check external dependencies and optional reference files.
-prepare-silva      Prepare local SILVA FASTA and metadata files.
-detect-intron      Detect intron-like insertions and write analysis FASTA files.
-insert-backbone    Insert extension sequences into the SILVA backbone.
-overlap-backbone   Summarize taxon overlap across backbone assignment files.
-derep              Run VSEARCH dereplication.
-cluster            Run VSEARCH clustering at one or more identity levels.
-classify           Classify representative sequences using SINTAX plus SILVA/type-strain hits.
-assign             Assign new sequences to old centroids or create new clusters.
-provenance         Summarize source composition from UC clustering levels.
-summarize          Summarize existing classify outputs.
-run                Run dereplication, clustering and classification in one workflow.
-```
+| Command | Description |
+|---------|-------------|
+| `check` | Check external dependencies and optional reference files |
+| `prepare-silva` | Prepare local SILVA FASTA and metadata files |
+| `detect-intron` | Detect intron-like insertions and write analysis FASTA files |
+| `insert-backbone` | Insert extension sequences into the SILVA backbone |
+| `overlap-backbone` | Summarize taxon overlap across backbone assignment files |
+| `derep` | Run VSEARCH dereplication |
+| `cluster` | Run VSEARCH clustering at one or more identity levels |
+| `classify` | Classify representative sequences using SINTAX plus SILVA/type-strain hits |
+| `assign` | Assign new sequences to old centroids or create new clusters |
+| `provenance` | Summarize source composition from UC clustering levels |
+| `summarize` | Summarize existing classify outputs |
+| `run` | Run dereplication, clustering and classification in one workflow |
 
 Every command supports:
 
@@ -64,16 +79,32 @@ autotax2 <command> --help
 autotax2 <command> --example
 ```
 
-## Prepare SILVA
+## 🗄️ 3. Prepare SILVA
 
-AutoTax2 expects local SILVA files, for example:
+AutoTax2 expects local SILVA files. You can download them from the [SILVA website](https://www.arb-silva.de/).
 
-```text
-SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz
-SILVA_138.2_SSURef.full_metadata.gz
+**Download the SILVA files:**
+
+```bash
+wget https://www.arb-silva.de/fileadmin/silva_databases/current/Exports/full_metadata/SILVA_138.2_SSURef_Nr99.full_metadata.gz
+wget https://www.arb-silva.de/fileadmin/silva_databases/current/Exports/full_metadata/SILVA_138.2_SSURef_Nr99.full_metadata.gz.md5
+wget https://www.arb-silva.de/fileadmin/silva_databases/current/Exports/SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz
+wget https://www.arb-silva.de/fileadmin/silva_databases/current/Exports/SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz.md5
 ```
 
-Prepare a local reference directory:
+**Verify the downloads:**
+
+```bash
+md5sum -c SILVA_138.2_SSURef.full_metadata.gz.md5
+md5sum -c SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz.md5
+```
+
+**Required files:**
+
+- `SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz`
+- `SILVA_138.2_SSURef.full_metadata.gz`
+
+**Prepare a local reference directory:**
 
 ```bash
 autotax2 prepare-silva \
@@ -84,34 +115,31 @@ autotax2 prepare-silva \
   --threads auto
 ```
 
-`prepare-silva` cleans the input FASTA before downstream processing. The default behavior is strict:
+> **Note:** `prepare-silva` cleans the input FASTA before downstream processing. The default behavior is strict:
+> - U/u is converted to T
+> - Only A/C/G/T is allowed after conversion
+> - Records containing N, ambiguity codes, gaps, dots, or any other non-ACGT character are dropped
+> - A summary report and a dropped-record report are generated
 
-```text
-U/u is converted to T
-only A/C/G/T is allowed after conversion
-records containing N, ambiguity codes, gaps, dots, or any other non-ACGT character are dropped
-a summary report and a dropped-record report are generated
+**Output directory structure:**
+
 ```
-
-The output directory contains files such as:
-
-```text
 refdatabases/
-  <prefix>.fasta
-  <prefix>.udb
-  <prefix>_sintax.fasta
-  <prefix>_sintax.udb
-  <prefix>_typestrains.fasta
-  <prefix>_typestrains.udb
-  <prefix>_raw_input.fasta
-  <prefix>_fasta_cleaning_summary.tsv
-  <prefix>_fasta_cleaning_dropped.tsv
-  silva_taxonomy.tsv
-  typestrains_accessionIDs.txt
-  autotax2_ref_manifest.tsv
+  ├── <prefix>.fasta
+  ├── <prefix>.udb
+  ├── <prefix>_sintax.fasta
+  ├── <prefix>_sintax.udb
+  ├── <prefix>_typestrains.fasta
+  ├── <prefix>_typestrains.udb
+  ├── <prefix>_raw_input.fasta
+  ├── <prefix>_fasta_cleaning_summary.tsv
+  ├── <prefix>_fasta_cleaning_dropped.tsv
+  ├── silva_taxonomy.tsv
+  ├── typestrains_accessionIDs.txt
+  └── autotax2_ref_manifest.tsv
 ```
 
-## Optional intron detection
+## 🔍 4. Optional intron detection
 
 Use this when long-read 16S sequences may contain intron-like insertions.
 
@@ -128,18 +156,14 @@ autotax2 detect-intron \
   --threads auto
 ```
 
-Important outputs:
+**Important outputs:**
 
-```text
-hifimeta_intron/analysis_sequences.fa
-hifimeta_intron/sequence_version_map.tsv
-```
+- `hifimeta_intron/analysis_sequences.fa` - Analysis FASTA for matching and clustering
+- `hifimeta_intron/sequence_version_map.tsv` - Sequence mapping file
 
-The analysis FASTA is used for matching and clustering. The original FASTA can still be used for final centroid output.
+## 🔗 5. Insert sequences into the SILVA backbone
 
-## Insert sequences into the SILVA backbone
-
-After intron detection:
+**With intron detection:**
 
 ```bash
 autotax2 insert-backbone \
@@ -154,7 +178,7 @@ autotax2 insert-backbone \
   --threads auto
 ```
 
-Without intron detection:
+**Without intron detection:**
 
 ```bash
 autotax2 insert-backbone \
@@ -168,18 +192,18 @@ autotax2 insert-backbone \
   --threads auto
 ```
 
-Common outputs include:
+**Common outputs:**
 
-```text
+```
 hifimeta_inserted/
-  sequence_rank_assignment.tsv
-  rank_taxa_summary.tsv
-  rank_uc/
-  rank_centroids_core/
-  rank_centroids_original/
+  ├── sequence_rank_assignment.tsv
+  ├── rank_taxa_summary.tsv
+  ├── rank_uc/
+  ├── rank_centroids_core/
+  └── rank_centroids_original/
 ```
 
-## Multi-reference overlap
+## 📊 6. Multi-reference overlap
 
 Run `insert-backbone` for each reference dataset, then compare assignments:
 
@@ -194,19 +218,19 @@ autotax2 overlap-backbone \
   --out ref_overlap
 ```
 
-Typical outputs:
+**Typical outputs:**
 
-```text
+```
 ref_overlap/
-  taxon_presence_by_source.tsv
-  taxon_count_by_source.tsv
-  source_pairwise_overlap_by_rank.tsv
-  source_unique_taxa_by_rank.tsv
+  ├── taxon_presence_by_source.tsv
+  ├── taxon_count_by_source.tsv
+  ├── source_pairwise_overlap_by_rank.tsv
+  └── source_unique_taxa_by_rank.tsv
 ```
 
-## Classic helper workflow
+## ⚙️ 7. Classic helper workflow
 
-Dereplicate:
+**Dereplicate:**
 
 ```bash
 autotax2 derep \
@@ -216,7 +240,7 @@ autotax2 derep \
   --threads auto
 ```
 
-Cluster:
+**Cluster:**
 
 ```bash
 autotax2 cluster \
@@ -226,7 +250,7 @@ autotax2 cluster \
   --threads auto
 ```
 
-Classify:
+**Classify:**
 
 ```bash
 autotax2 classify \
@@ -236,7 +260,7 @@ autotax2 classify \
   --threads auto
 ```
 
-Or run the helper workflow end to end:
+**Or run end to end:**
 
 ```bash
 autotax2 run \
@@ -247,40 +271,40 @@ autotax2 run \
   --threads auto
 ```
 
-## Input requirements
+## 📝 8. Input requirements
 
-### SILVA FASTA
+### 8.1 SILVA FASTA
 
 SILVA FASTA headers should contain an accession followed by semicolon-separated taxonomy:
 
-```text
+```
 >AB000001.1.1500 Bacteria;Firmicutes;Bacilli;Lactobacillales;Lactobacillaceae;Lactobacillus;Lactobacillus acidophilus;
 ACGT...
 ```
 
-### SILVA metadata
+### 8.2 SILVA metadata
 
 The metadata table must contain at least:
 
-```text
+```
 acc
 flags
 ```
 
 Accessions whose `flags` column contains `[T]` or `[t]` are extracted as type-strain references.
 
-### User FASTA
+### 8.3 User FASTA
 
 The first token of each header is treated as the sequence ID:
 
-```text
+```
 >seq000001 optional description
 ACGT...
 ```
 
-## Development
+## 🛠️ 9. Development
 
-Install in editable mode and run tests:
+**Install in editable mode and run tests:**
 
 ```bash
 python -m pip install -e .
@@ -288,8 +312,9 @@ python -m pip install pytest
 pytest
 ```
 
-Check syntax quickly:
+**Check syntax quickly:**
 
 ```bash
 python -m py_compile autotax2/cli.py autotax2/prepare.py
 ```
+

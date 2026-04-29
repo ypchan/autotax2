@@ -1,139 +1,350 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Sequence
 
-from .utils import ensure_dir, run_cmd, which_or_error
-
-
-def vsearch_path(vsearch: str = "vsearch") -> str:
-    if "/" in vsearch:
-        return vsearch
-    return which_or_error(vsearch)
+from .logging import print_command, step
+from .threads import validate_threads
+from .utils import ensure_dir
 
 
-def dereplicate(input_fasta: str, outdir: str, vsearch: str = "vsearch", threads: int = 8, dry_run: bool = False) -> str:
-    ensure_dir(outdir)
-    output = str(Path(outdir) / "derep.fa")
-    uc = str(Path(outdir) / "derep.uc")
-    cmd = [
-        vsearch_path(vsearch),
-        "--derep_fulllength", input_fasta,
-        "--output", output,
+class VsearchError(RuntimeError):
+    """Raised when a VSEARCH command fails."""
+
+
+def _run(command: Sequence[str | Path]) -> None:
+    """Run an external command and raise a readable error on failure."""
+
+    print_command(command)
+
+    completed = subprocess.run(
+        [str(part) for part in command],
+        check=False,
+        text=True,
+    )
+
+    if completed.returncode != 0:
+        raise VsearchError(
+            "VSEARCH command failed with exit code "
+            f"{completed.returncode}: "
+            + " ".join(str(part) for part in command)
+        )
+
+
+def _identity_label(identity: float) -> str:
+    """Convert identity threshold to a compact output label.
+
+    Examples
+    --------
+    0.99 -> otu099
+    0.97 -> otu097
+    0.9  -> otu090
+    """
+
+    if not 0 < identity <= 1:
+        raise ValueError("Identity must be > 0 and <= 1.")
+
+    return f"otu{int(round(identity * 100)):03d}"
+
+
+def _require_method(method: str) -> str:
+    allowed = {"cluster_size", "cluster_fast", "cluster_smallmem"}
+
+    if method not in allowed:
+        raise ValueError(
+            "Invalid VSEARCH clustering method. "
+            f"Expected one of {sorted(allowed)}, got {method!r}."
+        )
+
+    return method
+
+
+def _require_strand(strand: str) -> str:
+    allowed = {"both", "plus"}
+
+    if strand not in allowed:
+        raise ValueError(
+            f"Invalid strand value. Expected 'both' or 'plus', got {strand!r}."
+        )
+
+    return strand
+
+
+def dereplicate(
+    input_fasta: str | Path,
+    outdir: str | Path,
+    vsearch: str | Path,
+    threads: int,
+) -> str:
+    """Run VSEARCH full-length dereplication.
+
+    Outputs
+    -------
+    derep.fasta
+        Dereplicated FASTA with size annotations.
+    derep.uc
+        UC mapping file from original sequences to dereplicated representatives.
+    """
+
+    threads = validate_threads(threads)
+    outdir = ensure_dir(outdir)
+
+    output_fasta = outdir / "derep.fasta"
+    output_uc = outdir / "derep.uc"
+
+    step("VSEARCH dereplication")
+
+    command = [
+        vsearch,
+        "--derep_fulllength",
+        input_fasta,
+        "--output",
+        output_fasta,
+        "--uc",
+        output_uc,
         "--sizeout",
-        "--uc", uc,
-        "--threads", str(threads),
+        "--threads",
+        str(threads),
     ]
-    run_cmd(cmd, dry_run=dry_run)
-    return output
+
+    _run(command)
+    return str(output_fasta)
 
 
-def sort_by_size(input_fasta: str, outdir: str, vsearch: str = "vsearch", minsize: Optional[int] = None, dry_run: bool = False) -> str:
-    ensure_dir(outdir)
-    output = str(Path(outdir) / "derep_sorted.fa")
-    cmd = [vsearch_path(vsearch), "--sortbysize", input_fasta, "--output", output]
+def sort_by_size(
+    input_fasta: str | Path,
+    outdir: str | Path,
+    vsearch: str | Path,
+    minsize: Optional[int] = None,
+) -> str:
+    """Sort FASTA records by abundance using VSEARCH sortbysize."""
+
+    outdir = ensure_dir(outdir)
+
+    output_fasta = outdir / "derep_sorted.fasta"
+
+    step("VSEARCH sortbysize")
+
+    command: List[str | Path] = [
+        vsearch,
+        "--sortbysize",
+        input_fasta,
+        "--output",
+        output_fasta,
+        "--sizeout",
+    ]
+
     if minsize is not None:
-        cmd += ["--minsize", str(minsize)]
-    run_cmd(cmd, dry_run=dry_run)
-    return output
+        if minsize < 1:
+            raise ValueError("minsize must be at least 1.")
+        command.extend(["--minsize", str(minsize)])
+
+    _run(command)
+    return str(output_fasta)
 
 
 def cluster(
-    input_fasta: str,
-    outdir: str,
+    input_fasta: str | Path,
+    outdir: str | Path,
     identity: float,
-    method: str = "cluster_size",
-    vsearch: str = "vsearch",
-    threads: int = 8,
+    method: str,
+    vsearch: str | Path,
+    threads: int,
     relabel: Optional[str] = None,
-    dry_run: bool = False,
-) -> dict:
-    ensure_dir(outdir)
-    label = str(identity).replace(".", "")
-    centroids = str(Path(outdir) / f"otu{label}_centroids.fa")
-    uc = str(Path(outdir) / f"otu{label}.uc")
+) -> Dict[str, str]:
+    """Cluster sequences with VSEARCH at one identity threshold."""
 
-    if method not in {"cluster_size", "cluster_fast", "cluster_smallmem"}:
-        raise ValueError("--method must be cluster_size, cluster_fast, or cluster_smallmem")
+    threads = validate_threads(threads)
+    method = _require_method(method)
 
-    cmd = [
-        vsearch_path(vsearch),
-        f"--{method}", input_fasta,
-        "--id", str(identity),
-        "--centroids", centroids,
-        "--uc", uc,
-        "--threads", str(threads),
+    outdir = ensure_dir(outdir)
+    label = _identity_label(identity)
+
+    centroids = outdir / f"{label}_centroids.fasta"
+    uc = outdir / f"{label}.uc"
+
+    step(f"VSEARCH {method} at identity {identity}")
+
+    command: List[str | Path] = [
+        vsearch,
+        f"--{method}",
+        input_fasta,
+        "--id",
+        str(identity),
+        "--centroids",
+        centroids,
+        "--uc",
+        uc,
+        "--sizein",
+        "--sizeout",
+        "--threads",
+        str(threads),
     ]
+
     if relabel:
-        cmd += ["--relabel", relabel]
-    run_cmd(cmd, dry_run=dry_run)
-    return {"centroids": centroids, "uc": uc, "identity": identity, "method": method}
+        command.extend(["--relabel", relabel])
+
+    _run(command)
+
+    return {
+        "centroids": str(centroids),
+        "uc": str(uc),
+    }
 
 
 def sintax(
-    query_fasta: str,
-    sintax_db: str,
-    outdir: str,
-    cutoff: float = 0.8,
-    vsearch: str = "vsearch",
-    threads: int = 8,
-    dry_run: bool = False,
+    input_fasta: str | Path,
+    db: str | Path,
+    outdir: str | Path,
+    cutoff: float,
+    vsearch: str | Path,
+    threads: int,
 ) -> str:
-    ensure_dir(outdir)
-    out = str(Path(outdir) / "sintax.tsv")
-    cmd = [
-        vsearch_path(vsearch),
-        "--sintax", query_fasta,
-        "--db", sintax_db,
-        "--sintax_cutoff", str(cutoff),
-        "--tabbedout", out,
-        "--threads", str(threads),
+    """Classify sequences with VSEARCH SINTAX."""
+
+    threads = validate_threads(threads)
+
+    if not 0 <= cutoff <= 1:
+        raise ValueError("SINTAX cutoff must be between 0 and 1.")
+
+    outdir = ensure_dir(outdir)
+
+    output_tsv = outdir / "sintax.tsv"
+
+    step("VSEARCH SINTAX classification")
+
+    command = [
+        vsearch,
+        "--sintax",
+        input_fasta,
+        "--db",
+        db,
+        "--tabbedout",
+        output_tsv,
+        "--sintax_cutoff",
+        str(cutoff),
+        "--threads",
+        str(threads),
     ]
-    run_cmd(cmd, dry_run=dry_run)
-    return out
+
+    _run(command)
+    return str(output_tsv)
 
 
 def usearch_global(
-    query_fasta: str,
-    db_fasta: str,
-    outdir: str,
-    prefix: str,
-    identity: float = 0.70,
-    maxaccepts: int = 10,
-    strand: str = "both",
-    vsearch: str = "vsearch",
-    threads: int = 8,
-    notmatched: bool = False,
-    dry_run: bool = False,
-) -> dict:
-    ensure_dir(outdir)
-    userout = str(Path(outdir) / f"{prefix}.tsv")
-    uc = str(Path(outdir) / f"{prefix}.uc")
-    cmd = [
-        vsearch_path(vsearch),
-        "--usearch_global", query_fasta,
-        "--db", db_fasta,
-        "--id", str(identity),
-        "--strand", strand,
-        "--maxaccepts", str(maxaccepts),
-        "--maxrejects", "0",
-        "--uc", uc,
-        "--userout", userout,
-        "--userfields", "query+target+id+alnlen+mism+opens+qlo+qhi+tlo+thi+qcov+tcov",
-        "--threads", str(threads),
+    input_fasta: str | Path,
+    db: str | Path,
+    outdir: str | Path,
+    output_prefix: str,
+    min_id: float,
+    maxaccepts: int,
+    strand: str,
+    vsearch: str | Path,
+    threads: int,
+    use_udb: bool = False,
+) -> Dict[str, str]:
+    """Run VSEARCH global search.
+
+    Outputs
+    -------
+    <output_prefix>.userout.tsv
+        Custom tabular output.
+    <output_prefix>.blast6.tsv
+        BLAST6-like output.
+    """
+
+    threads = validate_threads(threads)
+    strand = _require_strand(strand)
+
+    if not 0 < min_id <= 1:
+        raise ValueError("min_id must be > 0 and <= 1.")
+
+    if maxaccepts < 1:
+        raise ValueError("maxaccepts must be at least 1.")
+
+    outdir = ensure_dir(outdir)
+
+    userout = outdir / f"{output_prefix}.userout.tsv"
+    blast6 = outdir / f"{output_prefix}.blast6.tsv"
+
+    step(f"VSEARCH global search: {output_prefix}")
+
+    command: List[str | Path] = [
+        vsearch,
+        "--usearch_global",
+        input_fasta,
+        "--id",
+        str(min_id),
+        "--maxaccepts",
+        str(maxaccepts),
+        "--strand",
+        strand,
+        "--userout",
+        userout,
+        "--blast6out",
+        blast6,
+        "--userfields",
+        "query+target+id+alnlen+mism+opens+qlo+qhi+tlo+thi+evalue+bits+ql+tl",
+        "--threads",
+        str(threads),
     ]
-    out = {"userout": userout, "uc": uc}
-    if notmatched:
-        nm = str(Path(outdir) / f"{prefix}_notmatched.fa")
-        cmd += ["--notmatched", nm]
-        out["notmatched"] = nm
-    run_cmd(cmd, dry_run=dry_run)
-    return out
+
+    if use_udb:
+        command.extend(["--db", db])
+    else:
+        command.extend(["--db", db])
+
+    _run(command)
+
+    return {
+        "userout": str(userout),
+        "blast6out": str(blast6),
+    }
 
 
+def make_udb(
+    input_fasta: str | Path,
+    output_udb: str | Path,
+    vsearch: str | Path,
+    threads: int,
+) -> str:
+    """Build a VSEARCH UDB database."""
 
-def make_udb(input_fasta: str, output_udb: str, vsearch: str = "vsearch", dry_run: bool = False) -> str:
-    """Build a USEARCH-compatible UDB with VSEARCH."""
-    cmd = [vsearch_path(vsearch), "--makeudb_usearch", input_fasta, "--output", output_udb]
-    run_cmd(cmd, dry_run=dry_run)
-    return output_udb
+    threads = validate_threads(threads)
+
+    output_udb = Path(output_udb)
+    output_udb.parent.mkdir(parents=True, exist_ok=True)
+
+    step(f"Building VSEARCH UDB: {output_udb}")
+
+    command = [
+        vsearch,
+        "--makeudb_usearch",
+        input_fasta,
+        "--output",
+        output_udb,
+        "--threads",
+        str(threads),
+    ]
+
+    _run(command)
+    return str(output_udb)
+
+
+def vsearch_version(vsearch: str | Path) -> str:
+    """Return the first line of `vsearch --version`."""
+
+    completed = subprocess.run(
+        [str(vsearch), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = (completed.stdout or completed.stderr or "").strip()
+
+    if completed.returncode != 0:
+        raise VsearchError(f"Failed to run {vsearch} --version")
+
+    return output.splitlines()[0] if output else ""

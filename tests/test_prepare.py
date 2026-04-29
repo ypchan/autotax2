@@ -1,4 +1,4 @@
-from autotax2.prepare import clean_taxon, make_sintax_header, parse_silva_header
+from src.prepare import clean_taxon, make_sintax_header, parse_silva_header
 
 
 def test_clean_taxon():

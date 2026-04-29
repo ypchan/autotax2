@@ -1,4 +1,4 @@
-from autotax2.assign import parse_vsearch_uc_for_new_clusters, uc_assignments_from_old_hits
+from src.assign import parse_vsearch_uc_for_new_clusters, uc_assignments_from_old_hits
 
 
 def test_old_assignments(tmp_path):

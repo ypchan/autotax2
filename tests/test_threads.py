@@ -1,4 +1,4 @@
-from autotax2.threads import resolve_threads
+from src.threads import resolve_threads
 
 
 def test_resolve_threads_auto():

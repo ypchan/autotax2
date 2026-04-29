@@ -1,4 +1,4 @@
-from autotax2.provenance import pairwise_source_overlap, read_source_map, summarize_cluster_sources
+from src.provenance import pairwise_source_overlap, read_source_map, summarize_cluster_sources
 
 
 def test_read_source_map(tmp_path):

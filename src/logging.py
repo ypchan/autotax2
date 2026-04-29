@@ -1,115 +1,183 @@
 from __future__ import annotations
 
+import shlex
 import sys
+import time
 from contextlib import contextmanager
-from typing import Iterator, Optional
-
-try:
-    from rich.console import Console
-    from rich.logging import RichHandler
-    from rich.panel import Panel
-    from rich.progress import (
-        BarColumn,
-        Progress,
-        SpinnerColumn,
-        TaskProgressColumn,
-        TextColumn,
-        TimeElapsedColumn,
-        TimeRemainingColumn,
-    )
-    from rich.table import Table
-    RICH_AVAILABLE = True
-except Exception:  # pragma: no cover - fallback for minimal environments
-    Console = None  # type: ignore
-    Progress = None  # type: ignore
-    Panel = None  # type: ignore
-    Table = None  # type: ignore
-    RICH_AVAILABLE = False
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Iterator, Optional, Sequence, TextIO
 
 
-class PlainConsole:
-    def print(self, *args, **kwargs) -> None:
-        print(*args)
-
-    def rule(self, title: str = "") -> None:
-        print(f"\n--- {title} ---")
-
-
-console = Console(stderr=True) if RICH_AVAILABLE else PlainConsole()
+@dataclass(frozen=True)
+class LogConfig:
+    quiet: bool = False
+    verbose: bool = False
+    stream: TextIO = sys.stderr
 
 
-def info(message: str) -> None:
-    console.print(f"[cyan]INFO[/cyan] {message}" if RICH_AVAILABLE else f"INFO {message}")
+_DEFAULT_CONFIG = LogConfig()
 
 
-def success(message: str) -> None:
-    console.print(f"[green]OK[/green] {message}" if RICH_AVAILABLE else f"OK {message}")
+def _write(message: str, *, stream: Optional[TextIO] = None) -> None:
+    handle = stream or _DEFAULT_CONFIG.stream
+    print(message, file=handle)
 
 
-def warn(message: str) -> None:
-    console.print(f"[yellow]WARN[/yellow] {message}" if RICH_AVAILABLE else f"WARN {message}")
+def info(message: str, *, stream: Optional[TextIO] = None) -> None:
+    _write(f"[autotax2] {message}", stream=stream)
 
 
-def error(message: str) -> None:
-    console.print(f"[red]ERROR[/red] {message}" if RICH_AVAILABLE else f"ERROR {message}")
+def step(message: str, *, stream: Optional[TextIO] = None) -> None:
+    _write(f"[autotax2] {message}", stream=stream)
 
 
-def print_kv(title: str, rows: dict[str, str]) -> None:
-    if RICH_AVAILABLE:
-        table = Table(title=title, show_lines=False)
-        table.add_column("Key", style="bold")
-        table.add_column("Value")
-        for k, v in rows.items():
-            table.add_row(str(k), str(v))
-        console.print(table)
-    else:
-        print(f"== {title} ==")
-        for k, v in rows.items():
-            print(f"{k}\t{v}")
+def success(message: str, *, stream: Optional[TextIO] = None) -> None:
+    _write(f"OK {message}", stream=stream)
 
 
-def print_example(title: str, command: str, notes: Optional[str] = None) -> None:
-    if RICH_AVAILABLE:
-        body = f"[bold]Command[/bold]\n\n[green]{command}[/green]"
-        if notes:
-            body += f"\n\n[bold]Notes[/bold]\n{notes}"
-        console.print(Panel(body, title=title, border_style="cyan"))
-    else:
-        print(f"\n{title}\n{command}\n")
-        if notes:
-            print(notes)
+def warning(message: str, *, stream: Optional[TextIO] = None) -> None:
+    _write(f"WARNING {message}", stream=stream)
+
+
+def warn(message: str, *, stream: Optional[TextIO] = None) -> None:
+    warning(message, stream=stream)
+
+
+def error(message: str, *, stream: Optional[TextIO] = None) -> None:
+    _write(f"ERROR {message}", stream=stream)
+
+
+def debug(
+    message: str,
+    *,
+    enabled: bool = False,
+    stream: Optional[TextIO] = None,
+) -> None:
+    if enabled:
+        _write(f"DEBUG {message}", stream=stream)
+
+
+def section(title: str, *, stream: Optional[TextIO] = None) -> None:
+    _write("", stream=stream)
+    _write(title, stream=stream)
+
+
+def key_value(
+    key: str,
+    value: object,
+    *,
+    stream: Optional[TextIO] = None,
+) -> None:
+    _write(f"  {key:<28} {value}", stream=stream)
+
+
+def command_to_string(command: Sequence[str | Path]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in command)
+
+
+def command(
+    command_parts: Sequence[str | Path],
+    *,
+    stream: Optional[TextIO] = None,
+) -> None:
+    _write(f"[command] {command_to_string(command_parts)}", stream=stream)
+
+
+def print_command(
+    command_parts: Sequence[str | Path],
+    *,
+    stream: Optional[TextIO] = None,
+) -> None:
+    command(command_parts, stream=stream)
+
+
+def print_outputs(
+    outputs: dict[str, object],
+    *,
+    stream: Optional[TextIO] = None,
+) -> None:
+    for key, value in outputs.items():
+        _write(f"{key}\t{value}", stream=stream)
 
 
 @contextmanager
-def progress_context() -> Iterator[object]:
-    """Return a Rich Progress instance or a no-op fallback."""
-    if RICH_AVAILABLE:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            transient=False,
+def timed_step(
+    message: str,
+    *,
+    stream: Optional[TextIO] = None,
+) -> Iterator[None]:
+    start = time.time()
+    step(message, stream=stream)
+
+    try:
+        yield
+    except Exception:
+        elapsed = time.time() - start
+        error(f"Failed after {elapsed:.1f}s: {message}", stream=stream)
+        raise
+    else:
+        elapsed = time.time() - start
+        success(f"{message} ({elapsed:.1f}s)", stream=stream)
+
+
+class ProgressCounter:
+    """Simple text progress reporter for streaming FASTA/TSV processing."""
+
+    def __init__(
+        self,
+        label: str,
+        *,
+        interval: int = 100000,
+        stream: Optional[TextIO] = None,
+    ) -> None:
+        if interval < 1:
+            raise ValueError("Progress interval must be at least 1.")
+
+        self.label = label
+        self.interval = interval
+        self.stream = stream
+        self.count = 0
+        self.start_time = time.time()
+        self.last_report_time = self.start_time
+
+    def update(self, n: int = 1) -> None:
+        self.count += n
+
+        if self.count % self.interval == 0:
+            self.report()
+
+    def report(self) -> None:
+        now = time.time()
+        elapsed = max(now - self.start_time, 1e-9)
+        rate = self.count / elapsed
+
+        _write(
+            f"[autotax2] processed {self.count:,} {self.label} "
+            f"({rate:,.1f}/s)",
+            stream=self.stream,
         )
-        with progress:
-            yield progress
-    else:
-        class NoProgress:
-            def add_task(self, description, total=1):
-                print(description)
-                return 0
 
-            def update(self, task_id, advance=1, completed=None, description=None):
-                if description:
-                    print(description)
-        yield NoProgress()
+        self.last_report_time = now
+
+    def finish(self) -> None:
+        elapsed = time.time() - self.start_time
+
+        if self.count == 0:
+            _write(f"[autotax2] processed 0 {self.label}", stream=self.stream)
+            return
+
+        rate = self.count / max(elapsed, 1e-9)
+
+        _write(
+            f"[autotax2] processed {self.count:,} {self.label} "
+            f"in {elapsed:.1f}s ({rate:,.1f}/s)",
+            stream=self.stream,
+        )
 
 
-def progress_step(progress: object, task_id: int, message: str, advance: int = 1) -> None:
-    if RICH_AVAILABLE and hasattr(progress, "update"):
-        progress.update(task_id, advance=advance, description=message)
-    else:
-        print(message)
+def summarize_paths(title: str, paths: Iterable[tuple[str, str | Path]]) -> None:
+    section(title)
+
+    for key, value in paths:
+        key_value(key, value)

@@ -1,56 +1,81 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
-
-from .logging import warn
 
 
-def available_cpus() -> int:
-    try:
-        return os.cpu_count() or 1
-    except Exception:
+DEFAULT_THREADS = 4
+
+
+class ThreadValueError(ValueError):
+    """Raised when a thread value is not a positive integer."""
+
+
+def available_cpu_count() -> int:
+    """Return the number of CPUs visible to Python.
+
+    This is informational only. AutoTax2 does not use CPU count as the
+    default thread number.
+    """
+
+    count = os.cpu_count()
+    if count is None or count < 1:
         return 1
+    return count
 
 
-def resolve_threads(value: Optional[int | str], reserve: int = 1, min_threads: int = 1) -> int:
-    """Resolve a user thread request into a safe integer.
+def validate_threads(threads: int) -> int:
+    """Validate and return a positive integer thread count.
 
-    Accepted values:
-    - None or "auto": max(1, os.cpu_count() - reserve)
-    - positive integer string/int: requested thread count
-    - values <= 0: treated as auto
+    AutoTax2 only accepts explicit positive integers.
 
-    The result is capped at os.cpu_count() to avoid accidental oversubscription.
+    Valid:
+        1
+        4
+        12
+
+    Invalid:
+        "auto"
+        "default"
+        "4"
+        0
+        -1
+        None
     """
-    cpus = available_cpus()
-    auto_threads = max(min_threads, cpus - max(0, reserve))
 
-    if value is None:
-        requested = auto_threads
-    elif isinstance(value, str) and value.lower() == "auto":
-        requested = auto_threads
-    else:
-        try:
-            requested = int(value)  # type: ignore[arg-type]
-        except Exception as exc:
-            raise ValueError(f"Invalid --threads value: {value}") from exc
-        if requested <= 0:
-            requested = auto_threads
+    if not isinstance(threads, int):
+        raise ThreadValueError(
+            f"Thread count must be a positive integer, not {type(threads).__name__}."
+        )
 
-    if requested > cpus:
-        warn(f"--threads {requested} is larger than detected CPUs {cpus}; capping to {cpus}.")
-        requested = cpus
-    if requested < min_threads:
-        requested = min_threads
-    return requested
+    if threads < 1:
+        raise ThreadValueError("Thread count must be at least 1.")
+
+    return threads
 
 
-def per_job_threads(total_threads: int, jobs: int = 1, min_threads: int = 1) -> int:
-    """Return threads per job for workflows that run multiple jobs.
+def parse_threads(text: str) -> int:
+    """Parse a thread count from config text.
 
-    AutoTax2 currently runs VSEARCH jobs sequentially, but this helper is used
-    to keep future parallel multi-level execution from oversubscribing CPUs.
+    This function is only for reading config files. It accepts numeric strings,
+    but rejects 'auto' and all non-integer values.
     """
-    jobs = max(1, int(jobs))
-    return max(min_threads, total_threads // jobs)
+
+    value = text.strip()
+
+    if not value:
+        raise ThreadValueError("Thread count is empty.")
+
+    try:
+        threads = int(value)
+    except ValueError as exc:
+        raise ThreadValueError(
+            f"Thread count must be a positive integer, not {text!r}."
+        ) from exc
+
+    return validate_threads(threads)
+
+
+def default_threads() -> int:
+    """Return the AutoTax2 default thread count."""
+
+    return DEFAULT_THREADS

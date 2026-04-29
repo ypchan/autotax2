@@ -1,4 +1,4 @@
-from autotax2.intron import find_query_insertions, identity_excluding_insertions, remove_intervals
+from src.intron import find_query_insertions, identity_excluding_insertions, remove_intervals
 
 
 def test_find_query_insertions():
