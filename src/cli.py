@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import typer
+import rich_click as click
 
 from .assign import assign_or_create
 from .backbone import insert_backbone
@@ -43,25 +44,66 @@ from .vsearch import dereplicate, sintax, sort_by_size, usearch_global
 
 CONTEXT_SETTINGS = {
     "help_option_names": ["-h", "--help"],
+    "max_content_width": 110,
 }
 
+ROOT_HELP = """
+[bold cyan]AutoTax2[/bold cyan] — 16S reference preparation, taxonomy classification, and intron analysis.
+
+[bold]Typical workflow[/bold]
+  1. [green]autotax2 config init[/green]
+  2. [green]autotax2 prepare-silva[/green]
+  3. [green]autotax2 build-intron-ref[/green]
+  4. [green]autotax2 orient[/green] or [green]autotax2 detect-intron --orient[/green]
+  5. [green]autotax2 detect-intron[/green]
+  6. [green]autotax2 derep[/green] -> [green]autotax2 cluster[/green] -> [green]autotax2 classify[/green]
+"""
+
+ROOT_EPILOG = """
+[bold]Examples[/bold]
+  [green]autotax2 check[/green]
+  [green]autotax2 config show[/green]
+  [green]autotax2 detect-intron --help[/green]
+  [green]autotax2 analyze-intron --help[/green]
+"""
+
+# rich-click is intentionally required. If it is not installed, importing this
+# module should fail immediately instead of silently falling back to plain help.
+click.rich_click.USE_RICH_MARKUP = True
+click.rich_click.SHOW_ARGUMENTS = True
+click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
+click.rich_click.APPEND_METAVARS_HELP = True
+click.rich_click.STYLE_HELPTEXT = "white"
+click.rich_click.STYLE_METAVAR = "bold yellow"
+click.rich_click.STYLE_OPTION = "bold cyan"
+click.rich_click.STYLE_SWITCH = "bold cyan"
+click.rich_click.STYLE_ARGUMENT = "bold cyan"
+click.rich_click.STYLE_COMMAND = "bold green"
+click.rich_click.STYLE_USAGE = "bold"
+click.rich_click.STYLE_USAGE_COMMAND = "bold green"
+click.rich_click.STYLE_OPTIONS_PANEL_BORDER = "dim"
+click.rich_click.STYLE_COMMANDS_PANEL_BORDER = "dim"
+click.rich_click.MAX_WIDTH = 110
 
 app = typer.Typer(
     name="autotax2",
-    help="AutoTax2 workflow.",
+    help=ROOT_HELP,
+    epilog=ROOT_EPILOG,
     no_args_is_help=True,
     add_completion=False,
     context_settings=CONTEXT_SETTINGS,
-    rich_markup_mode=None,
+    rich_markup_mode="rich",
+    pretty_exceptions_show_locals=False,
 )
 
 config_app = typer.Typer(
     name="config",
-    help="Configure AutoTax2 software and reference paths.",
+    help="Manage persistent AutoTax2 software and reference settings.",
     no_args_is_help=True,
     add_completion=False,
     context_settings=CONTEXT_SETTINGS,
-    rich_markup_mode=None,
+    rich_markup_mode="rich",
+    pretty_exceptions_show_locals=False,
 )
 
 
@@ -239,7 +281,7 @@ def run_sina_orientation(
     )
 
 
-@config_app.command("init", help="Create the AutoTax2 configuration file.")
+@config_app.command("init", help="Create the AutoTax2 configuration file.", rich_help_panel="Configuration commands")
 def config_init(
     overwrite: bool = typer.Option(
         False,
@@ -262,7 +304,7 @@ def config_init(
     success(f"Configuration file: {path}")
 
 
-@config_app.command("set", help="Set one persistent configuration value.")
+@config_app.command("set", help="Set one persistent configuration value.", rich_help_panel="Configuration commands")
 def config_set(
     key: str = typer.Argument(
         ...,
@@ -303,7 +345,7 @@ def config_set(
     success(f"Updated {key} in {path}")
 
 
-@config_app.command("show", help="Show the current AutoTax2 configuration.")
+@config_app.command("show", help="Show the current AutoTax2 configuration.", rich_help_panel="Configuration commands")
 def config_show() -> None:
     """
     Print the current configuration file and all configured values.
@@ -324,7 +366,7 @@ def config_show() -> None:
         typer.echo(f"  {key:<30} {value}")
 
 
-@config_app.command("check", help="Check configured software and reference paths.")
+@config_app.command("check", help="Check configured software and reference paths.", rich_help_panel="Configuration commands")
 def config_check() -> None:
     """
     Check the current AutoTax2 configuration file.
@@ -353,10 +395,10 @@ def config_check() -> None:
         raise typer.Exit(1)
 
 
-app.add_typer(config_app, name="config")
+app.add_typer(config_app, name="config", rich_help_panel="Setup")
 
 
-@app.command("check", help="Check software, Python packages, and reference data.")
+@app.command("check", help="Check software, Python packages, and reference data.", rich_help_panel="Setup")
 def check(
     ref_manifest: Optional[Path] = typer.Option(
         None,
@@ -375,7 +417,7 @@ def check(
     This command checks:
       1. Config file
       2. Required software: vsearch, blastn, makeblastdb
-      3. Optional software: mafft, meme, streme, fimo, RNAfold, RNAalifold, barrnap
+      3. Optional software: sina, mafft, meme, streme, fimo, RNAfold, RNAalifold, barrnap
       4. Python packages
       5. Reference data paths
       6. Optional input files such as source maps
@@ -391,7 +433,7 @@ def check(
         raise typer.Exit(1)
 
 
-@app.command("prepare-silva", help="Prepare local SILVA FASTA and metadata files.")
+@app.command("prepare-silva", help="Prepare local SILVA FASTA and metadata files.", rich_help_panel="Setup")
 def prepare_silva_cmd(
     silva_fasta: Optional[Path] = typer.Option(
         None,
@@ -480,7 +522,7 @@ def prepare_silva_cmd(
     success(f"SILVA preparation finished: {out}")
 
 
-@app.command("orient", help="Orient near-full-length or full-length 16S sequences with SINA.")
+@app.command("orient", help="Orient near-full-length or full-length 16S sequences with SINA.", rich_help_panel="Intron workflow")
 def orient_cmd(
     input: Optional[Path] = typer.Option(
         None,
@@ -555,7 +597,7 @@ def orient_cmd(
     success(f"Orientation finished: {out}")
 
 
-@app.command("build-intron-ref", help="Build species-level references for intron detection.")
+@app.command("build-intron-ref", help="Build species-level references for intron detection.", rich_help_panel="Intron workflow")
 def build_intron_ref_cmd(
     silva_fasta: Optional[Path] = typer.Option(
         None,
@@ -752,7 +794,7 @@ def build_intron_ref_cmd(
     print_outputs(entries)
     success(f"Audited intron reference built: {out}")
 
-@app.command("detect-intron", help="Detect intron-like insertions with local broken-HSP evidence.")
+@app.command("detect-intron", help="Detect intron-like insertions with local broken-HSP evidence.", rich_help_panel="Intron workflow")
 def detect_intron_cmd(
     input: Optional[Path] = typer.Option(
         None,
@@ -1037,7 +1079,7 @@ def detect_intron_cmd(
     success(f"Intron detection finished: {out}")
 
 
-@app.command("insert-backbone", help="Insert extension sequences into the SILVA backbone.")
+@app.command("insert-backbone", help="Insert extension sequences into the SILVA backbone.", rich_help_panel="Backbone utilities")
 def insert_backbone_cmd(
     input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
@@ -1108,7 +1150,7 @@ def insert_backbone_cmd(
     success(f"Backbone insertion finished: {out}")
 
 
-@app.command("overlap-backbone", help="Compare taxon overlap across backbone assignments.")
+@app.command("overlap-backbone", help="Compare taxon overlap across backbone assignments.", rich_help_panel="Backbone utilities")
 def overlap_backbone_cmd(
     assignments: Optional[List[Path]] = typer.Option(
         None,
@@ -1140,7 +1182,7 @@ def overlap_backbone_cmd(
     print_outputs(outputs)
 
 
-@app.command("derep", help="Run standardized VSEARCH dereplication.")
+@app.command("derep", help="Run standardized VSEARCH dereplication.", rich_help_panel="Core taxonomy workflow")
 def derep_cmd(
     input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
@@ -1167,7 +1209,7 @@ def derep_cmd(
         typer.echo(derep_fasta)
 
 
-@app.command("cluster", help="Cluster sequences at one or more identity levels.")
+@app.command("cluster", help="Cluster sequences at one or more identity levels.", rich_help_panel="Core taxonomy workflow")
 def cluster_cmd(
     input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
@@ -1198,7 +1240,7 @@ def cluster_cmd(
         typer.echo(f"{identity}\t{result['centroids']}\t{result['uc']}")
 
 
-@app.command("classify", help="Classify representative sequences.")
+@app.command("classify", help="Classify representative sequences.", rich_help_panel="Core taxonomy workflow")
 def classify_cmd(
     input: Optional[Path] = typer.Option(None, "--input", help="Representative FASTA."),
     out: Optional[Path] = typer.Option(None, "--out", help="Output directory."),
@@ -1249,7 +1291,7 @@ def classify_cmd(
     success(f"Classification finished: {out}")
 
 
-@app.command("assign", help="Assign new sequences to old centroids or create new clusters.")
+@app.command("assign", help="Assign new sequences to old centroids or create new clusters.", rich_help_panel="Core taxonomy workflow")
 def assign_cmd(
     new: Optional[Path] = typer.Option(None, "--new", help="New FASTA."),
     old_centroids: Optional[Path] = typer.Option(None, "--old-centroids", help="Existing centroid FASTA."),
@@ -1295,7 +1337,7 @@ def assign_cmd(
     success(f"Assignment finished: {out}")
 
 
-@app.command("provenance", help="Summarize source composition from UC clustering levels.")
+@app.command("provenance", help="Summarize source composition from UC clustering levels.", rich_help_panel="Core taxonomy workflow")
 def provenance_cmd(
     source_map: Optional[Path] = typer.Option(None, "--source-map", help="TSV mapping sequence IDs to source labels."),
     derep_uc: Optional[Path] = typer.Option(None, "--derep-uc", help="Dereplication UC file."),
@@ -1315,7 +1357,7 @@ def provenance_cmd(
     print_outputs(outputs)
 
 
-@app.command("summarize", help="Summarize existing classify outputs.")
+@app.command("summarize", help="Summarize existing classify outputs.", rich_help_panel="Core taxonomy workflow")
 def summarize_cmd(
     sintax_file: Optional[Path] = typer.Option(None, "--sintax", help="SINTAX output TSV."),
     silva_hits: Optional[Path] = typer.Option(None, "--silva-hits", help="SILVA global-search hits table."),
@@ -1337,7 +1379,7 @@ def summarize_cmd(
     typer.echo(out)
 
 
-@app.command("map-intron-coordinates", help="Map confirmed intron insertion sites to a coordinate reference.")
+@app.command("map-intron-coordinates", help="Map confirmed intron insertion sites to a coordinate reference.", rich_help_panel="Intron workflow")
 def map_intron_coordinates_cmd(
     confirmed_introns: Optional[Path] = typer.Option(
         None,
@@ -1421,7 +1463,7 @@ def map_intron_coordinates_cmd(
     success(f"Intron coordinate mapping finished: {out}")
 
 
-@app.command("analyze-intron", help="Analyze confirmed intron-like insertion sequences.")
+@app.command("analyze-intron", help="Analyze confirmed intron-like insertion sequences.", rich_help_panel="Intron workflow")
 def analyze_intron_cmd(
     introns: Optional[Path] = typer.Option(
         None,
@@ -1548,7 +1590,7 @@ def analyze_intron_cmd(
     success(f"Intron analysis finished: {out}")
 
 
-@app.command("run", help="Run dereplication, clustering, and classification.")
+@app.command("run", help="Run dereplication, clustering, and classification.", rich_help_panel="Core taxonomy workflow")
 def run_cmd(
     input: Optional[Path] = typer.Option(None, "--input", help="Input FASTA."),
     out: Optional[Path] = typer.Option(None, "--out", help="Output project directory."),
