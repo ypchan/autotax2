@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autotax2"
+version = "0.1.0"
+description = "Fixed-backbone, rank-aware, incremental rRNA gene reference builder."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "autotax2 contributors" }
+]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.0",
+  "PyYAML>=6.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0"
+]
+
+[project.scripts]
+autotax2 = "autotax2.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["autotax2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -p no:cacheprovider"
+markers = [
+  "integration: optional tests requiring real barrnap, SINA, VSEARCH, and user-provided input files"
+]

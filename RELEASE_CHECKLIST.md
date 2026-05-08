@@ -1,0 +1,36 @@
+# Release Checklist
+
+- [ ] `python -m pip install -e ".[dev]"`
+- [ ] `python -m pytest`
+- [ ] `autotax2 --help`
+- [ ] all subcommand help works:
+  - [ ] `autotax2 init --help`
+  - [ ] `autotax2 resolve-silva --help`
+  - [ ] `autotax2 prepare-dataset --help`
+  - [ ] `autotax2 orient-sina --help`
+  - [ ] `autotax2 cluster-search --help`
+  - [ ] `autotax2 place --help`
+  - [ ] `autotax2 export --help`
+  - [ ] `autotax2 summarize --help`
+  - [ ] `autotax2 validate --help`
+- [ ] tiny mocked E2E test passes.
+- [ ] optional real-tool integration run passes when local data/tools are
+  available:
+  - [ ] `bash scripts/run_real_integration_test.sh --help`
+  - [ ] `AUTOTAX2_RUN_INTEGRATION=1 python -m pytest tests/integration -m integration`
+- [ ] `autotax2 validate --build <tiny_build>` passes on the tiny build.
+- [ ] README quick start is current.
+- [ ] AGENTS.md is current.
+- [ ] pyproject.toml version is updated or intentionally unchanged.
+- [ ] External tools are documented:
+  - [ ] barrnap 1.10.5
+  - [ ] SINA
+  - [ ] VSEARCH
+- [ ] Export files checked:
+  - [ ] SINTAX format checked.
+  - [ ] QIIME2 taxonomy format checked.
+  - [ ] DADA2 assignSpecies format checked.
+- [ ] No duplicate placeholders.
+- [ ] Deprecated placeholders are not reused.
+- [ ] Named SILVA backbone was not mutated.
+- [ ] If the build package is available: `python -m build`.

@@ -1,0 +1,21 @@
+project:
+  name: example-autotax2-reference
+  workdir: ./autotax2-work
+
+silva:
+  fasta: ./inputs/silva.fasta
+  taxonomy: ./inputs/silva.tax
+
+defaults:
+  vsearch_iddef: 2
+  sina_orientation: loose
+  require_barrnap_recut: true
+  near_best_delta: 0.01
+
+exports:
+  output_dir: ./exports
+  formats:
+    - sintax
+    - qiime2
+    - dada2-togenus
+    - dada2-species
