@@ -166,6 +166,17 @@ def test_orient_sina_failure_can_be_fatal(
         )
 
 
+def test_orient_sina_rejects_unimplemented_metric_thresholds(sina_tmp_dir: Path) -> None:
+    _make_dataset(sina_tmp_dir, {"D20_000001": "ACGTACGT"})
+
+    with pytest.raises(NotImplementedError, match="threshold filtering is not implemented"):
+        orient_dataset_with_sina(
+            sina_tmp_dir / "build",
+            "digester2020",
+            min_sina_identity=0.9,
+        )
+
+
 def test_sina_summary_tsv_has_real_tabs_and_newlines(
     sina_tmp_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -187,7 +198,7 @@ def _make_dataset(tmp_dir: Path, records: dict[str, str]) -> Path:
     dataset_dir = tmp_dir / "build" / "datasets" / "01_digester2020"
     dataset_dir.mkdir(parents=True)
     fasta_text = "".join(f">{seq_id}\n{sequence}\n" for seq_id, sequence in records.items())
-    (dataset_dir / "barrnap.extracted.fa").write_text(fasta_text, encoding="utf-8")
+    (dataset_dir / "prepared.ssu.fa").write_text(fasta_text, encoding="utf-8")
     return dataset_dir
 
 

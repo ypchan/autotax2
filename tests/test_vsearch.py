@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from autotax2.vsearch import (
+    build_current_representatives,
     build_cluster_fast_command,
     build_usearch_global_command,
     check_vsearch_version,
@@ -169,6 +170,27 @@ def test_cluster_search_writes_outputs_and_summary(
     assert tool_rows[0]["tool"] == "vsearch"
     assert "--iddef 2" in tool_rows[0]["command"]
     assert "--maxaccepts 50" in tool_rows[0]["command"]
+
+
+def test_build_current_representatives_rebuilds_existing_cache(vsearch_tmp_dir: Path) -> None:
+    build = vsearch_tmp_dir / "build"
+    registry = build / "registry"
+    silva = build / "silva"
+    registry.mkdir(parents=True)
+    silva.mkdir(parents=True)
+    (registry / "current_representatives.fa").write_text(">OLD\nAAAA\n", encoding="utf-8")
+    (silva / "silva_named_backbone.fa").write_text(
+        ">REF_NEW Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
+        "ACGT\n",
+        encoding="utf-8",
+    )
+
+    count = build_current_representatives(build)
+    content = (registry / "current_representatives.fa").read_text(encoding="utf-8")
+
+    assert count == 1
+    assert ">REF_NEW" in content
+    assert ">OLD" not in content
 
 
 def _make_cluster_search_build(tmp_dir: Path) -> Path:

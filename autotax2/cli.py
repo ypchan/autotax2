@@ -9,8 +9,9 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from autotax2.barrnap import prepare_dataset
+from autotax2.audit import write_event_log
 from autotax2.config import load_config
+from autotax2.dataset_prepare import prepare_dataset
 from autotax2.export import export_references
 from autotax2.placement import place_dataset
 from autotax2.reports import summarize_build
@@ -32,15 +33,6 @@ class DomainChoice(str, Enum):
 
     ARCHAEA = "Archaea"
     BACTERIA = "Bacteria"
-
-
-class MultiRrnaPolicy(str, Enum):
-    """Supported policies for multiple barrnap rRNA hits."""
-
-    LONGEST = "longest"
-    BEST = "best"
-    ALL = "all"
-    FAIL = "fail"
 
 
 class StrandChoice(str, Enum):
@@ -83,7 +75,20 @@ def init(
     console.print(
         "[green]Initialized autotax2 build:[/green] "
         f"{outdir} records={summary['records']} "
-        f"named={summary['named']} unresolved={summary['unresolved']}"
+        f"named={summary['named']} unresolved={summary['unresolved']} "
+        f"rejected={summary.get('rejected', 0)}"
+    )
+    write_event_log(
+        outdir,
+        "init",
+        {
+            "silva_fasta": silva_fasta,
+            "domain": domain or "",
+            "records": summary["records"],
+            "named": summary["named"],
+            "unresolved": summary["unresolved"],
+            "rejected": summary.get("rejected", 0),
+        },
     )
 
 
@@ -97,10 +102,26 @@ def resolve_silva(
     threads: int = typer.Option(4, "--threads", help="Threads for VSEARCH clustering."),
     species_id: float = typer.Option(0.987, "--species-id", help="Species cluster identity."),
     genus_id: float = typer.Option(0.945, "--genus-id", help="Genus cluster identity."),
-    family_id: float = typer.Option(0.865, "--family-id", help="Family cluster identity."),
-    order_id: float = typer.Option(0.820, "--order-id", help="Order cluster identity."),
-    class_id: float = typer.Option(0.785, "--class-id", help="Class cluster identity."),
-    floor_id: float = typer.Option(0.750, "--floor-id", help="Minimum clustering identity floor."),
+    family_id: float = typer.Option(
+        0.865,
+        "--family-id",
+        help="Reserved for future SILVA resolver ranks; currently must remain default.",
+    ),
+    order_id: float = typer.Option(
+        0.820,
+        "--order-id",
+        help="Reserved for future SILVA resolver ranks; currently must remain default.",
+    ),
+    class_id: float = typer.Option(
+        0.785,
+        "--class-id",
+        help="Reserved for future SILVA resolver ranks; currently must remain default.",
+    ),
+    floor_id: float = typer.Option(
+        0.750,
+        "--floor-id",
+        help="Reserved for future SILVA resolver ranks; currently must remain default.",
+    ),
     vsearch_bin: str = typer.Option("vsearch", "--vsearch-bin", help="VSEARCH executable."),
     iddef: int = typer.Option(2, "--iddef", help="VSEARCH --iddef value."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Write proposals without registry updates."),
@@ -125,6 +146,18 @@ def resolve_silva(
         f"{build} unresolved={summary.unresolved_records} "
         f"placeholder_taxa={summary.placeholder_taxa}"
     )
+    write_event_log(
+        build,
+        "resolve-silva",
+        {
+            "threads": threads,
+            "species_id": species_id,
+            "genus_id": genus_id,
+            "dry_run": summary.dry_run,
+            "unresolved_records": summary.unresolved_records,
+            "placeholder_taxa": summary.placeholder_taxa,
+        },
+    )
 
 
 @app.command("prepare-dataset")
@@ -132,59 +165,37 @@ def prepare_dataset_command(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     name: str = typer.Option(..., "--name", help="Dataset name."),
     prefix: str = typer.Option(..., "--prefix", help="Frozen dataset prefix."),
-    fasta: Path = typer.Option(..., "--fasta", help="Input intron-free FASTA file."),
+    fasta: Path = typer.Option(
+        ...,
+        "--fasta",
+        help="Input FASTA already processed to SSU/16S sequences outside autotax2.",
+    ),
     domain: DomainChoice = typer.Option(..., "--domain", help="Dataset domain."),
-    threads: int = typer.Option(4, "--threads", help="Threads for barrnap."),
-    barrnap_bin: str = typer.Option("barrnap", "--barrnap-bin", help="barrnap executable."),
-    barrnap_kingdom: Optional[str] = typer.Option(
-        None,
-        "--barrnap-kingdom",
-        help="Optional barrnap kingdom override: arc or bac.",
-    ),
-    strict_tool_version: bool = typer.Option(
-        False,
-        "--strict-tool-version",
-        help="Fail unless barrnap 1.10.5 is detected.",
-    ),
-    multi_rrna_policy: MultiRrnaPolicy = typer.Option(
-        MultiRrnaPolicy.LONGEST,
-        "--multi-rrna-policy",
-        help="Policy for sequences with multiple rRNA hits.",
-    ),
-    min_rrna_len_archaea: int = typer.Option(
+    min_ssu_len_archaea: int = typer.Option(
         900,
-        "--min-rrna-len-archaea",
-        help="Minimum extracted archaeal rRNA length.",
+        "--min-ssu-len-archaea",
+        help="Minimum prepared archaeal SSU/16S length.",
     ),
-    min_rrna_len_bacteria: int = typer.Option(
+    min_ssu_len_bacteria: int = typer.Option(
         1200,
-        "--min-rrna-len-bacteria",
-        help="Minimum extracted bacterial rRNA length.",
+        "--min-ssu-len-bacteria",
+        help="Minimum prepared bacterial SSU/16S length.",
     ),
-    flank: int = typer.Option(0, "--flank", help="Extra bases to include around barrnap hit."),
-    allow_partial: bool = typer.Option(False, "--allow-partial", help="Allow partial barrnap hits."),
     reject_non_atgc: bool = typer.Option(
         True,
         "--reject-non-atgc/--no-reject-non-atgc",
         help="Reject normalized input sequences containing non-ATGC symbols.",
     ),
 ) -> None:
-    """Prepare a custom dataset with mandatory barrnap recutting."""
+    """Prepare a custom dataset from externally processed SSU/16S sequences."""
     summary = prepare_dataset(
         build=build,
         name=name,
         prefix=prefix,
         fasta=fasta,
         domain=domain.value,
-        threads=threads,
-        barrnap_bin=barrnap_bin,
-        barrnap_kingdom=barrnap_kingdom,
-        strict_tool_version=strict_tool_version,
-        multi_rrna_policy=multi_rrna_policy.value,
-        min_rrna_len_archaea=min_rrna_len_archaea,
-        min_rrna_len_bacteria=min_rrna_len_bacteria,
-        flank=flank,
-        allow_partial=allow_partial,
+        min_ssu_len_archaea=min_ssu_len_archaea,
+        min_ssu_len_bacteria=min_ssu_len_bacteria,
         reject_non_atgc=reject_non_atgc,
     )
     console.print(
@@ -196,6 +207,18 @@ def prepare_dataset_command(
     console.print(
         "[cyan]Next:[/cyan] "
         f"autotax2 orient-sina --build {build} --dataset {summary.dataset}"
+    )
+    write_event_log(
+        build,
+        "prepare-dataset",
+        {
+            "dataset": summary.dataset,
+            "prefix": summary.prefix,
+            "input_fasta": fasta,
+            "domain": domain.value,
+            "final_prepared_sequences": summary.final_prepared_sequences,
+            "dataset_dir": summary.dataset_dir,
+        },
     )
 
 
@@ -223,17 +246,17 @@ def orient_sina_command(
     fallback_copy_original: bool = typer.Option(
         True,
         "--fallback-copy-original/--no-fallback-copy-original",
-        help="Copy original barrnap FASTA records when SINA output is missing or failed.",
+        help="Copy prepared SSU/16S FASTA records when SINA output is missing or failed.",
     ),
     min_sina_identity: float = typer.Option(
         0.0,
         "--min-sina-identity",
-        help="Reserved loose identity confidence threshold.",
+        help="Currently unsupported SINA metric filter; leave at 0.0.",
     ),
     min_sina_score: float = typer.Option(
         0.0,
         "--min-sina-score",
-        help="Reserved loose score confidence threshold.",
+        help="Currently unsupported SINA metric filter; leave at 0.0.",
     ),
 ) -> None:
     """Orient prepared rRNA sequences with SINA loose settings."""
@@ -253,6 +276,17 @@ def orient_sina_command(
     console.print(
         "[green]Completed SINA orientation:[/green] "
         f"{summary.dataset} records={summary.oriented_records}{fallback}"
+    )
+    write_event_log(
+        build,
+        "orient-sina",
+        {
+            "dataset": summary.dataset,
+            "threads": threads,
+            "records": summary.oriented_records,
+            "fallback_used": summary.fallback_used,
+            "dataset_dir": summary.dataset_dir,
+        },
     )
 
 
@@ -310,6 +344,16 @@ def cluster_search_command(
         "[green]Completed VSEARCH cluster/search:[/green] "
         f"{summary.dataset} filtered_hits={summary.registry_hits_filtered}"
     )
+    write_event_log(
+        build,
+        "cluster-search",
+        {
+            "dataset": summary.dataset,
+            "threads": threads,
+            "iddef": iddef,
+            "registry_hits_filtered": summary.registry_hits_filtered,
+        },
+    )
 
 
 @app.command("place")
@@ -359,6 +403,16 @@ def place_command(
         f"[green]Completed {mode}placement:[/green] "
         f"{summary.dataset} assignments={summary.assignments} "
         f"created_taxa={summary.created_taxa}"
+    )
+    write_event_log(
+        build,
+        "place",
+        {
+            "dataset": summary.dataset,
+            "assignments": summary.assignments,
+            "created_taxa": summary.created_taxa,
+            "dry_run": summary.dry_run,
+        },
     )
 
 
@@ -426,7 +480,19 @@ def export_command(
     console.print(
         "[green]Completed export:[/green] "
         f"formats={','.join(summary.formats)} records={summary.records_exported} "
-        f"outdir={summary.outdir}"
+        f"outdir={summary.outdir} validation={summary.validation_path}"
+    )
+    write_event_log(
+        build,
+        "export",
+        {
+            "formats": ",".join(summary.formats),
+            "records_exported": summary.records_exported,
+            "outdir": summary.outdir,
+            "manifest": summary.manifest_path,
+            "validation": summary.validation_path,
+            "validation_errors": summary.validation_errors,
+        },
     )
 
 
@@ -445,6 +511,14 @@ def summarize(
     console.print(
         "[green]Wrote reports:[/green] "
         f"files={summary.files_written} outdir={summary.outdir}"
+    )
+    write_event_log(
+        build,
+        "summarize",
+        {
+            "files_written": summary.files_written,
+            "outdir": summary.outdir,
+        },
     )
 
 
@@ -474,6 +548,18 @@ def validate(
     console.print(
         f"[{level}]Validation complete:[/{level}] "
         f"errors={summary.errors} warnings={summary.warnings} report={summary.report_md}"
+    )
+    write_event_log(
+        build,
+        "validate",
+        {
+            "errors": summary.errors,
+            "warnings": summary.warnings,
+            "report_md": summary.report_md,
+            "report_tsv": summary.report_tsv,
+            "strict": strict,
+            "check_exports": check_exports,
+        },
     )
     if summary.failed:
         raise typer.Exit(1)

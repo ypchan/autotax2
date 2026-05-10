@@ -15,9 +15,9 @@
   creation, VSEARCH .uc parsing, placeholder reuse/deprecation protection, dry
   runs, and unresolved mapping outputs.
 - Add Phase 5 `autotax2 prepare-dataset` for dataset prefix freezing, internal
-  sequence IDs, normalized FASTA/TSV outputs, MD5 duplicate membership,
-  mandatory barrnap 1.10.5 recutting, GFF3 parsing, rRNA extraction, and
-  preparation summaries.
+  sequence IDs, normalized/prepared SSU FASTA outputs, MD5 duplicate
+  membership, length checks, and preparation summaries from externally
+  extracted SSU/16S input FASTA.
 - Add Phase 6 `autotax2 orient-sina` for loose SINA orientation correction,
   version recording, failure fallback, missing-output fallback, strand
   detection, and orientation summaries.
@@ -39,14 +39,28 @@
   validation, taxonomy/tree checks, export checks, tool metadata checks, and
   Markdown/TSV validation reports.
 - Add Phase 11 tiny fixtures, mocked end-to-end pipeline tests, full CLI help
-  smoke coverage, barrnap tool-version recording, SILVA unresolved parent-link
-  cleanup, README/demo workflow documentation, AGENTS.md cleanup, and release
-  checklist.
+  smoke coverage, SILVA unresolved parent-link cleanup, README/demo workflow
+  documentation, AGENTS.md cleanup, and release checklist.
 - Add Phase 12 optional real-tool integration support with a user-provided data
   workflow script, skipped-by-default pytest integration test, real-tool
-  integration README, barrnap/SINA/VSEARCH checks, and post-run export/report
-  format checks.
+  integration README, SINA/VSEARCH checks, and post-run export/report format
+  checks.
 - Expand README into a detailed command-by-command algorithm guide with input
   formats, parameter behavior, output file schemas, placement formulas, export
   contracts, and an AI-generated project overview image.
+- Tighten early optimization semantics: initialize placeholder counter and
+  snapshot registry files, rebuild representative search FASTA from durable
+  sources when possible, use explicit prepared-SSU length/non-ATGC rejection,
+  and fail loudly for currently unsupported reserved threshold controls.
+- Reject SILVA records with empty or unresolved domain during initialization,
+  write `silva_rejected.tsv`, parse SILVA full metadata gzip files for
+  type-strain/type-material evidence, and prefer type-strain named SILVA
+  representatives.
+- Rewrite README as a text-only command-by-command tutorial with first-run,
+  single-dataset, and multi-dataset workflows.
+- Remove internal sequence extraction from `prepare-dataset`; dataset FASTA
+  inputs are now explicitly expected to be externally processed SSU/16S
+  sequences, and no internal extraction output files are produced.
+- Add dated command audit logs under `logs/` and automatic export format
+  self-check reports at `export/export_validation.tsv`.
 - Add initial pytest coverage.

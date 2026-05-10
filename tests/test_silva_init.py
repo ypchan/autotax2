@@ -66,10 +66,16 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
     assert (outdir / "registry" / "sequence_registry.tsv").exists()
     assert (outdir / "registry" / "dataset_registry.tsv").exists()
     assert (outdir / "registry" / "name_index.tsv").exists()
+    assert (outdir / "registry" / "cluster_to_taxon.tsv").exists()
+    assert (outdir / "registry" / "representative_registry.tsv").exists()
+    assert (outdir / "registry" / "placeholder_counters.yaml").exists()
+    assert (outdir / "registry" / "placeholder_counters.tsv").exists()
+    assert (outdir / "registry" / "protected_taxa_snapshot.tsv").exists()
     assert (outdir / "silva" / "silva_named_backbone.fa").exists()
     assert (outdir / "silva" / "silva_named_backbone.tax.tsv").exists()
     assert (outdir / "silva" / "silva_unresolved.fa").exists()
     assert (outdir / "silva" / "silva_unresolved.tsv").exists()
+    assert (outdir / "silva" / "silva_rejected.tsv").exists()
     assert (outdir / "logs").exists()
 
     named_fasta = read_fasta(outdir / "silva" / "silva_named_backbone.fa")
@@ -78,6 +84,7 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
     unresolved_rows = _read_tsv(outdir / "silva" / "silva_unresolved.tsv")
     sequence_rows = _read_tsv(outdir / "registry" / "sequence_registry.tsv")
     taxon_rows = _read_tsv(outdir / "registry" / "taxon_nodes.tsv")
+    representative_rows = _read_tsv(outdir / "registry" / "representative_registry.tsv")
 
     assert [record.seq_id for record in named_fasta] == ["AR1"]
     assert sorted(record.seq_id for record in unresolved_fasta) == ["AR2", "AR3"]
@@ -114,8 +121,40 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
     assert named_sequence["is_silva_named"] == "true"
     assert named_sequence["is_silva_unresolved"] == "false"
     assert named_sequence["original_taxonomy"] == named_taxonomy
+    assert named_sequence["taxon_id"]
     assert unresolved_sequence["protected"] == "false"
     assert unresolved_sequence["is_silva_unresolved"] == "true"
+    assert representative_rows[0]["representative_seq_id"] == "AR1"
+    assert representative_rows[0]["source_category"] == "named_silva"
+    assert representative_rows[0]["representative_reason"] == "first_silva_named_for_species"
+
+
+def test_init_rejects_records_with_empty_domain(silva_tmp_dir: Path) -> None:
+    fasta_path = silva_tmp_dir / "silva.fa"
+    outdir = silva_tmp_dir / "build"
+    fasta_path.write_text(
+        ">GOOD Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
+        "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
+        "ACGT\n"
+        ">EMPTY_DOMAIN ;Euryarchaeota;Methanobacteria;Methanobacteriales;"
+        "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
+        "ACGT\n"
+        ">NO_TAXONOMY\n"
+        "ACGT\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["init", "--silva-fasta", str(fasta_path), "--outdir", str(outdir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    sequence_ids = {row["seq_id"] for row in _read_tsv(outdir / "registry" / "sequence_registry.tsv")}
+    rejected = {row["seq_id"]: row["reject_reason"] for row in _read_tsv(outdir / "silva" / "silva_rejected.tsv")}
+
+    assert sequence_ids == {"GOOD"}
+    assert rejected == {"EMPTY_DOMAIN": "empty_domain", "NO_TAXONOMY": "empty_domain"}
 
 
 def test_init_outputs_real_tabs_and_newlines(silva_tmp_dir: Path) -> None:
@@ -174,12 +213,60 @@ def test_init_attaches_type_strain_metadata(silva_tmp_dir: Path) -> None:
 
     assert result.exit_code == 0, result.output
     sequence_rows = _read_tsv(outdir / "registry" / "sequence_registry.tsv")
+    representative_rows = _read_tsv(outdir / "registry" / "representative_registry.tsv")
 
     assert sequence_rows[0]["is_type_strain"] == "true"
     assert sequence_rows[0]["type_species_name"] == "Methanobacterium formicicum"
     assert sequence_rows[0]["type_strain_id"] == "DSM 1535"
     assert sequence_rows[0]["type_source"] == "manual"
     assert sequence_rows[0]["type_evidence"] == "fixture"
+    assert representative_rows[0]["representative_seq_id"] == "AR1"
+    assert representative_rows[0]["is_type_strain"] == "true"
+    assert representative_rows[0]["representative_reason"] == "type_strain"
+
+
+def test_init_reads_gzipped_silva_full_metadata_type_material(silva_tmp_dir: Path) -> None:
+    import gzip
+
+    fasta_path = silva_tmp_dir / "silva.fa"
+    metadata_path = silva_tmp_dir / "full_metadata.tsv.gz"
+    outdir = silva_tmp_dir / "build"
+    fasta_path.write_text(
+        ">AR1.1.100 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
+        "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
+        "ACGT\n"
+        ">AR2.1.100 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
+        "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
+        "ACGA\n",
+        encoding="utf-8",
+    )
+    with gzip.open(metadata_path, "wt", encoding="utf-8", newline="") as handle:
+        handle.write(
+            "primaryAccession\torganism_name\tstrain\ttype_material\n"
+            "AR2\tMethanobacterium formicicum\tDSM 1535\ttype strain\n"
+        )
+
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--silva-fasta",
+            str(fasta_path),
+            "--outdir",
+            str(outdir),
+            "--type-strain-metadata",
+            str(metadata_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    representative_rows = _read_tsv(outdir / "registry" / "representative_registry.tsv")
+    sequence_rows = {row["seq_id"]: row for row in _read_tsv(outdir / "registry" / "sequence_registry.tsv")}
+
+    assert representative_rows[0]["representative_seq_id"] == "AR2.1.100"
+    assert representative_rows[0]["representative_reason"] == "type_strain"
+    assert sequence_rows["AR2.1.100"]["is_type_strain"] == "true"
+    assert sequence_rows["AR2.1.100"]["type_source"] == "SILVA full_metadata"
 
 
 def _read_tsv(path: Path) -> list[dict[str, str]]:

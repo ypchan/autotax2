@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import csv
-import os
 import shutil
-import stat
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -40,11 +38,6 @@ def test_prepare_dataset_ids_mapping_rejection_and_duplicates(prepare_tmp_dir: P
         "ACGTN\n",
         encoding="utf-8",
     )
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t1\t8\t42\t+\t.\tName=16S_rRNA;product=16S_rRNA\n"
-        "D20_000002\tbarrnap\trRNA\t1\t8\t42\t+\t.\tName=16S_rRNA;product=16S_rRNA\n",
-    )
 
     result = runner.invoke(
         app,
@@ -60,11 +53,7 @@ def test_prepare_dataset_ids_mapping_rejection_and_duplicates(prepare_tmp_dir: P
             str(fasta),
             "--domain",
             "Archaea",
-            "--threads",
-            "8",
-            "--barrnap-bin",
-            str(barrnap_bin),
-            "--min-rrna-len-archaea",
+            "--min-ssu-len-archaea",
             "4",
         ],
     )
@@ -90,25 +79,19 @@ def test_prepare_dataset_ids_mapping_rejection_and_duplicates(prepare_tmp_dir: P
     assert membership_rows[1]["is_duplicate_sequence"] == "true"
     assert summary_rows[0]["duplicate_md5_sequences"] == "1"
     assert summary_rows[0]["rejected_non_atgc"] == "1"
+    assert summary_rows[0]["input_contract"] == "externally_processed_ssu"
 
 
-def test_prepare_dataset_extracts_gff_interval_minus_strand_and_flank(
-    prepare_tmp_dir: Path,
-) -> None:
+def test_prepare_dataset_writes_prepared_ssu_without_internal_extraction_outputs(prepare_tmp_dir: Path) -> None:
     build = prepare_tmp_dir / "build"
     fasta = prepare_tmp_dir / "input.fa"
     fasta.write_text(
         ">plus\n"
         "AAAACCCCGGGGTTTT\n"
-        ">minus\n"
-        "AAAACCCCGGGGTTTT\n",
+        ">second\n"
+        "TTTTCCCCAAAAGGGG\n",
         encoding="utf-8",
     )
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t5\t8\t42\t+\t.\tName=16S_rRNA;product=16S_rRNA\n"
-        "D20_000002\tbarrnap\trRNA\t5\t8\t42\t-\t.\tName=16S_rRNA;product=16S_rRNA\n",
-    )
 
     result = runner.invoke(
         app,
@@ -124,157 +107,27 @@ def test_prepare_dataset_extracts_gff_interval_minus_strand_and_flank(
             str(fasta),
             "--domain",
             "Archaea",
-            "--barrnap-bin",
-            str(barrnap_bin),
-            "--flank",
-            "1",
-            "--min-rrna-len-archaea",
+            "--min-ssu-len-archaea",
             "1",
         ],
     )
 
     assert result.exit_code == 0, result.output
     dataset_dir = build / "datasets" / "01_digester2020"
-    records = {record.seq_id: record.sequence for record in read_fasta(dataset_dir / "barrnap.extracted.fa")}
-    summary = {row["internal_seq_id"]: row for row in _read_tsv(dataset_dir / "barrnap.summary.tsv")}
+    records = {record.seq_id: record.sequence for record in read_fasta(dataset_dir / "prepared.ssu.fa")}
 
-    assert records["D20_000001"] == "ACCCCG"
-    assert records["D20_000002"] == "CGGGGT"
-    assert summary["D20_000001"]["extracted_start"] == "4"
-    assert summary["D20_000001"]["extracted_end"] == "9"
-    assert summary["D20_000002"]["reverse_complemented"] == "true"
+    assert records == {
+        "D20_000001": "AAAACCCCGGGGTTTT",
+        "D20_000002": "TTTTCCCCAAAAGGGG",
+    }
+    assert not list(dataset_dir.glob("*.gff3"))
+    assert not list(dataset_dir.glob("*.extracted.fa"))
 
 
-def test_prepare_dataset_flank_clips_at_sequence_boundaries(prepare_tmp_dir: Path) -> None:
+def test_prepare_dataset_short_ssu_is_rejected_by_domain_length(prepare_tmp_dir: Path) -> None:
     build = prepare_tmp_dir / "build"
     fasta = prepare_tmp_dir / "input.fa"
     fasta.write_text(">seq1\nACGTACGT\n", encoding="utf-8")
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t1\t4\t42\t+\t.\tproduct=16S ribosomal RNA\n",
-    )
-
-    result = runner.invoke(
-        app,
-        [
-            "prepare-dataset",
-            "--build",
-            str(build),
-            "--name",
-            "digester2020",
-            "--prefix",
-            "D20",
-            "--fasta",
-            str(fasta),
-            "--domain",
-            "Archaea",
-            "--barrnap-bin",
-            str(barrnap_bin),
-            "--flank",
-            "10",
-            "--min-rrna-len-archaea",
-            "1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    row = _read_tsv(build / "datasets" / "01_digester2020" / "barrnap.summary.tsv")[0]
-
-    assert row["extracted_start"] == "1"
-    assert row["extracted_end"] == "8"
-    assert row["extracted_length"] == "8"
-
-
-def test_prepare_dataset_longest_policy_chooses_longest_hit(prepare_tmp_dir: Path) -> None:
-    build = prepare_tmp_dir / "build"
-    fasta = prepare_tmp_dir / "input.fa"
-    fasta.write_text(">seq1\n" + "A" * 30 + "\n", encoding="utf-8")
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t2\t6\t10\t+\t.\tproduct=SSU_rRNA\n"
-        "D20_000001\tbarrnap\trRNA\t2\t20\t5\t+\t.\tproduct=SSU_rRNA\n",
-    )
-
-    result = runner.invoke(
-        app,
-        [
-            "prepare-dataset",
-            "--build",
-            str(build),
-            "--name",
-            "digester2020",
-            "--prefix",
-            "D20",
-            "--fasta",
-            str(fasta),
-            "--domain",
-            "Archaea",
-            "--barrnap-bin",
-            str(barrnap_bin),
-            "--multi-rrna-policy",
-            "longest",
-            "--min-rrna-len-archaea",
-            "1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    row = _read_tsv(build / "datasets" / "01_digester2020" / "barrnap.summary.tsv")[0]
-
-    assert row["selected_hit_index"] == "2"
-    assert row["extracted_length"] == "19"
-    assert row["warning"] == "multiple_rrna_hits"
-
-
-def test_prepare_dataset_fail_policy_rejects_multiple_hits(prepare_tmp_dir: Path) -> None:
-    build = prepare_tmp_dir / "build"
-    fasta = prepare_tmp_dir / "input.fa"
-    fasta.write_text(">seq1\n" + "A" * 30 + "\n", encoding="utf-8")
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t2\t6\t10\t+\t.\tproduct=SSU_rRNA\n"
-        "D20_000001\tbarrnap\trRNA\t2\t20\t5\t+\t.\tproduct=SSU_rRNA\n",
-    )
-
-    result = runner.invoke(
-        app,
-        [
-            "prepare-dataset",
-            "--build",
-            str(build),
-            "--name",
-            "digester2020",
-            "--prefix",
-            "D20",
-            "--fasta",
-            str(fasta),
-            "--domain",
-            "Archaea",
-            "--barrnap-bin",
-            str(barrnap_bin),
-            "--multi-rrna-policy",
-            "fail",
-            "--min-rrna-len-archaea",
-            "1",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    dataset_dir = build / "datasets" / "01_digester2020"
-    row = _read_tsv(dataset_dir / "barrnap.summary.tsv")[0]
-
-    assert row["status"] == "rejected_multiple_rrna_hits"
-    assert read_fasta(dataset_dir / "barrnap.extracted.fa") == []
-
-
-def test_prepare_dataset_short_rrna_is_rejected_by_domain_length(prepare_tmp_dir: Path) -> None:
-    build = prepare_tmp_dir / "build"
-    fasta = prepare_tmp_dir / "input.fa"
-    fasta.write_text(">seq1\nACGTACGT\n", encoding="utf-8")
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t1\t8\t42\t+\t.\tproduct=16S_rRNA\n",
-    )
 
     result = runner.invoke(
         app,
@@ -290,18 +143,18 @@ def test_prepare_dataset_short_rrna_is_rejected_by_domain_length(prepare_tmp_dir
             str(fasta),
             "--domain",
             "Bacteria",
-            "--barrnap-bin",
-            str(barrnap_bin),
         ],
     )
 
     assert result.exit_code == 0, result.output
     dataset_dir = build / "datasets" / "01_digester2020"
-    row = _read_tsv(dataset_dir / "barrnap.summary.tsv")[0]
+    row = _read_tsv(dataset_dir / "sequence_id_map.tsv")[0]
+    summary = _read_tsv(dataset_dir / "prepare_summary.tsv")[0]
 
-    assert row["status"] == "rejected_short_rrna"
-    assert row["warning"] == "short_rrna"
-    assert read_fasta(dataset_dir / "barrnap.extracted.fa") == []
+    assert row["rejected"] == "true"
+    assert row["reject_reason"] == "short_ssu"
+    assert summary["rejected_short_ssu"] == "1"
+    assert read_fasta(dataset_dir / "prepared.ssu.fa") == []
 
 
 def test_prepare_dataset_outputs_real_newlines_tabs_and_valid_headers(
@@ -310,10 +163,6 @@ def test_prepare_dataset_outputs_real_newlines_tabs_and_valid_headers(
     build = prepare_tmp_dir / "build"
     fasta = prepare_tmp_dir / "input.fa"
     fasta.write_text(">seq1\nACGTACGT\n", encoding="utf-8")
-    barrnap_bin = _fake_barrnap(
-        prepare_tmp_dir,
-        "D20_000001\tbarrnap\trRNA\t1\t8\t42\t+\t.\tproduct=16S_rRNA\n",
-    )
 
     result = runner.invoke(
         app,
@@ -329,17 +178,15 @@ def test_prepare_dataset_outputs_real_newlines_tabs_and_valid_headers(
             str(fasta),
             "--domain",
             "Archaea",
-            "--barrnap-bin",
-            str(barrnap_bin),
-            "--min-rrna-len-archaea",
+            "--min-ssu-len-archaea",
             "1",
         ],
     )
 
     assert result.exit_code == 0, result.output
     dataset_dir = build / "datasets" / "01_digester2020"
-    fasta_content = (dataset_dir / "barrnap.extracted.fa").read_text(encoding="utf-8")
-    tsv_content = (dataset_dir / "barrnap.summary.tsv").read_text(encoding="utf-8")
+    fasta_content = (dataset_dir / "prepared.ssu.fa").read_text(encoding="utf-8")
+    tsv_content = (dataset_dir / "prepare_summary.tsv").read_text(encoding="utf-8")
 
     assert fasta_content.startswith(">D20_000001\n")
     assert "\n" in fasta_content
@@ -415,19 +262,6 @@ def test_prepare_dataset_name_with_different_prefix_raises_error(
 
     assert result.exit_code != 0
     assert "already registered" in str(result.exception)
-
-
-def _fake_barrnap(tmp_dir: Path, gff_text: str) -> Path:
-    mock_gff = tmp_dir / f"mock_{uuid.uuid4().hex}.gff3"
-    mock_gff.write_text(gff_text, encoding="utf-8")
-    if os.name == "nt":
-        script = tmp_dir / f"fake_barrnap_{uuid.uuid4().hex}.cmd"
-        script.write_text(f"@echo off\r\ntype \"{mock_gff}\"\r\n", encoding="utf-8")
-    else:
-        script = tmp_dir / f"fake_barrnap_{uuid.uuid4().hex}.sh"
-        script.write_text(f"#!/bin/sh\ncat '{mock_gff}'\n", encoding="utf-8")
-        script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    return script
 
 
 def _read_tsv(path: Path) -> list[dict[str, str]]:

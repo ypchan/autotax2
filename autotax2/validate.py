@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from autotax2.export_validation import validate_export_dir
+
 DATASET_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 PLACEHOLDER_LIKE_RE = re.compile(r"^[cofgs]__[A-Za-z][A-Za-z0-9]*[cofgs][0-9]{6}$")
 PLACEHOLDER_ID_RE = re.compile(
@@ -310,55 +312,19 @@ def _check_exports(ctx: _ValidationContext) -> None:
     if not export_dir.exists():
         ctx.warning("exports", "No export directory found; skipping export file validation.", export_dir)
         return
-    sintax_paths = list((export_dir / "sintax").glob("*.fa*")) if (export_dir / "sintax").exists() else []
-    for path in sintax_paths:
-        for header in _fasta_headers(path):
-            if ";tax=" not in header:
-                ctx.error("export_sintax", f"SINTAX header lacks ;tax=: {header}", path)
-                continue
-            tax = header.split(";tax=", maxsplit=1)[1].rstrip(";")
-            for token in ("d:", "p:", "c:", "o:", "f:", "g:", "s:"):
-                if token not in tax:
-                    ctx.error("export_sintax", f"SINTAX tax string lacks {token}: {header}", path)
-            if "__" in tax:
-                ctx.error("export_sintax", f"SINTAX tax values contain rank prefixes: {header}", path)
-
-    qiime_tax = export_dir / "qiime2" / "reference_taxonomy.tsv"
-    if qiime_tax.exists():
-        rows = _read_tsv(qiime_tax)
-        if not rows:
-            ctx.error("export_qiime2", "QIIME2 taxonomy file is empty.", qiime_tax)
-        for row in rows:
-            if "Feature ID" not in row or "Taxon" not in row:
-                ctx.error("export_qiime2", "QIIME2 taxonomy TSV lacks Feature ID and Taxon columns.", qiime_tax)
-                break
-            if "d__" not in row.get("Taxon", ""):
-                ctx.error("export_qiime2", "QIIME2 taxonomy lacks d__ prefix.", qiime_tax)
-
-    dada2_dir = export_dir / "dada2"
-    if dada2_dir.exists():
-        for path in dada2_dir.glob("*toGenus*.fa*"):
-            for header in _fasta_headers(path):
-                taxonomy = header.split(maxsplit=1)[1] if len(header.split(maxsplit=1)) > 1 else ""
-                if taxonomy.count(";") < 5:
-                    ctx.error("export_dada2", f"DADA2 toGenus header does not contain taxonomy to genus: {header}", path)
-        for path in dada2_dir.glob("*assignSpecies*.fa*"):
-            for header in _fasta_headers(path):
-                parts = header.split()
-                if len(parts) < 3:
-                    ctx.error("export_dada2", f"DADA2 assignSpecies header lacks seq_id genus species: {header}", path)
-                if ";" in header:
-                    ctx.error("export_dada2", f"DADA2 assignSpecies header contains semicolon taxonomy: {header}", path)
-                if "g__" in header or "s__" in header:
-                    ctx.error("export_dada2", f"DADA2 assignSpecies header contains rank prefixes: {header}", path)
+    for finding in validate_export_dir(export_dir):
+        if finding.level == "error":
+            ctx.error(finding.check, finding.message, finding.path)
+        elif finding.level == "warning":
+            ctx.warning(finding.check, finding.message, finding.path)
+        else:
+            ctx.ok(finding.check, finding.message, finding.path)
 
 
 def _check_tool_metadata(ctx: _ValidationContext) -> None:
     for dataset_dir in _dataset_dirs(ctx.build_dir):
         tool_versions = _read_tsv(dataset_dir / "tool_versions.tsv")
         tools = {row.get("tool", "") for row in tool_versions}
-        if (dataset_dir / "barrnap.gff3").exists() and "barrnap" not in tools:
-            ctx.warning("tool_metadata", f"barrnap version was not recorded for {dataset_dir.name}.", dataset_dir / "tool_versions.tsv", strict_error=True)
         if (dataset_dir / "sina.oriented.fa").exists() and "sina" not in tools:
             ctx.warning("tool_metadata", f"SINA version/status was not recorded for {dataset_dir.name}.", dataset_dir / "tool_versions.tsv", strict_error=True)
         cluster_summary = _read_tsv(dataset_dir / "cluster_search_summary.tsv")
@@ -482,7 +448,7 @@ def _fasta_paths(build_dir: Path) -> list[Path]:
         build_dir / "silva" / "silva_unresolved.resolved.fa",
     ]
     for dataset_dir in _dataset_dirs(build_dir):
-        paths.extend([dataset_dir / "sina.oriented.fa", dataset_dir / "barrnap.extracted.fa", dataset_dir / "input.normalized.fa"])
+        paths.extend([dataset_dir / "sina.oriented.fa", dataset_dir / "prepared.ssu.fa", dataset_dir / "input.normalized.fa"])
     export_dir = build_dir / "export"
     if export_dir.exists():
         paths.extend(export_dir.glob("**/*.fa"))

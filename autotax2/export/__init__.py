@@ -20,6 +20,10 @@ from autotax2.export.formats import (
 )
 from autotax2.export.qiime2 import QIIME2_FORMATS, QIIME2_REFERENCE_SEQUENCES_FORMAT, QIIME2_TAXONOMY_FORMAT
 from autotax2.export.sintax import SINTAX_FORMAT, format_sintax_header
+from autotax2.export_validation import (
+    validate_export_dir,
+    write_export_validation_report,
+)
 from autotax2.io import FastaRecord, read_fasta, write_fasta
 from autotax2.registry import sequence_md5
 
@@ -67,6 +71,8 @@ class ExportSummary:
     formats: tuple[str, ...]
     records_exported: int
     manifest_path: Path
+    validation_path: Path
+    validation_errors: int
 
 
 def export_references(
@@ -132,12 +138,25 @@ def export_references(
     manifest_path = export_dir / "export_manifest.tsv"
     _ensure_writable(manifest_path, force=force)
     _write_tsv(manifest_rows, manifest_path, MANIFEST_FIELDS)
+    validation_findings = validate_export_dir(export_dir, formats=formats)
+    validation_path = write_export_validation_report(
+        validation_findings,
+        export_dir / "export_validation.tsv",
+    )
+    validation_errors = sum(1 for finding in validation_findings if finding.level == "error")
+    if validation_errors:
+        raise ValueError(
+            f"Export format self-check failed with {validation_errors} error(s); "
+            f"see {validation_path}."
+        )
     return ExportSummary(
         build=build_dir,
         outdir=export_dir,
         formats=formats,
         records_exported=len(records),
         manifest_path=manifest_path,
+        validation_path=validation_path,
+        validation_errors=validation_errors,
     )
 
 
@@ -383,7 +402,7 @@ def _sequence_lookup(build_dir: Path) -> dict[str, str]:
             paths.extend(
                 [
                     dataset_dir / "sina.oriented.fa",
-                    dataset_dir / "barrnap.extracted.fa",
+                    dataset_dir / "prepared.ssu.fa",
                     dataset_dir / "input.normalized.fa",
                 ]
             )

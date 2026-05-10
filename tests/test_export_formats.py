@@ -171,6 +171,20 @@ def test_export_manifest_has_real_tabs_and_newlines(export_tmp_dir: Path) -> Non
     assert all(row["records_exported"] == "2" for row in rows)
 
 
+def test_export_writes_format_self_check_report(export_tmp_dir: Path) -> None:
+    build = _make_export_build(export_tmp_dir)
+
+    summary = export_references(build, "all")
+
+    rows = _read_tsv(build / "export" / "export_validation.tsv")
+
+    assert summary.validation_path == build / "export" / "export_validation.tsv"
+    assert summary.validation_errors == 0
+    assert any(row["check"] == "export_sintax" and row["status"] == "ok" for row in rows)
+    assert any(row["check"] == "export_qiime2" and row["status"] == "ok" for row in rows)
+    assert any(row["check"] == "export_dada2" and row["status"] == "ok" for row in rows)
+
+
 def _make_export_build(tmp_dir: Path, incomplete: bool = False) -> Path:
     build = tmp_dir / "build"
     registry_dir = build / "registry"

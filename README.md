@@ -1,94 +1,244 @@
 # autotax2
 
 autotax2 is a fixed-backbone, rank-aware, incremental rRNA gene reference
-builder.
+builder. It preserves a stable named SILVA backbone while allowing controlled
+additions from downstream SSU/16S datasets. The project is designed for
+traceable taxonomy extension, reproducible classifier exports, and explicit
+validation of registry invariants.
 
-It builds a classifier-ready rRNA reference from a protected named SILVA
-backbone plus user datasets. The central idea is conservative: named SILVA
-taxonomy is fixed, unresolved SILVA records become a mutable placeholder
-scaffold, and every custom dataset is added with frozen prefixes, internal
-sequence IDs, MD5 de-duplication, rRNA recutting, orientation support, VSEARCH
-search, near-best hit consensus, and explicit registry validation.
+This documentation is intentionally text-only. No workflow diagrams are used.
 
-## Overall Algorithm Image
+## 1. Core Guarantees
 
-![AI-generated autotax2 algorithm overview](docs/autotax2_algorithm_overview.png)
+1. The named SILVA backbone is immutable.
+2. Named SILVA taxa with reliable taxonomy are marked as protected.
+3. SILVA unresolved records may form a mutable placeholder scaffold.
+4. Custom datasets can extend the scaffold, but they cannot overwrite named
+   SILVA taxa.
+5. Each custom dataset must use a frozen prefix, such as `D20`.
+6. Input sequence IDs are remapped to internal IDs such as `D20_000001`.
+7. Sequence MD5 values are recorded, and exact duplicate sequences are not
+   exported repeatedly.
+8. VSEARCH uses fixed `--iddef 2` by default.
+9. `prepare-dataset` expects an externally processed SSU/16S FASTA file.
+10. autotax2 does not run internal sequence extraction tools and does not
+    record external extraction-tool versions.
+11. SINA is used for orientation correction with loose behavior.
+12. Placement uses near-best hit consensus, not a single best hit.
+13. Exports include SINTAX, QIIME 2, DADA2 toGenus, and DADA2 assignSpecies
+    formats.
+14. Major CLI runs write dated audit logs under `logs/`.
 
-The image above is a visual overview. The authoritative algorithmic contract is
-the text below.
+## 2. Input Contracts
 
-## Design Principles
+### 2.1 SILVA Input
 
-- The SILVA named backbone is immutable: named protected taxa are not renamed,
-  reclustered, or replaced.
-- SILVA unresolved records may form a mutable placeholder scaffold. These
-  placeholders can later be deprecated or superseded, but IDs are never reused.
-- Dataset prefixes are supplied during dataset preparation and then frozen.
-- Input FASTA IDs are remapped to internal IDs such as `D20_000001`.
-- Sequence MD5 is computed from normalized sequence content. Exact duplicate
-  sequences are tracked and are not exported repeatedly.
-- VSEARCH identity uses fixed `--iddef 2` by default for clustering and search.
-- barrnap recutting is mandatory for custom datasets. The expected barrnap
-  version is `1.10.5`.
-- SINA is used with loose settings for orientation support. SINA failure is not
-  fatal by default.
-- Placement uses near-best hit consensus, not best-hit-only assignment.
-- Exports include SINTAX, QIIME2, DADA2 toGenus, and DADA2 assignSpecies files.
+Recommended SILVA inputs:
 
-## External Tools
+```text
+SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz
+SILVA_138.2_SSURef_Nr99.full_metadata.gz
+```
 
-- Python >= 3.10
-- barrnap, expected version `1.10.5`
-- SINA
-- VSEARCH
+`SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz` provides the sequence records and
+SILVA taxonomy strings. `SILVA_138.2_SSURef_Nr99.full_metadata.gz` is used to
+identify type-strain or type-material evidence. When such evidence is available,
+named SILVA representatives derived from type material are treated as the most
+reliable representative source.
 
-Normal unit tests do not require barrnap, SINA, VSEARCH, SILVA databases, or
-large user datasets. Optional real-tool integration instructions are in
-[tests/integration/README.md](tests/integration/README.md).
+### 2.2 Custom Dataset Input
 
-## Install for Development
+`autotax2 prepare-dataset` accepts only FASTA files that already contain
+externally extracted SSU/16S sequences.
+
+If the original data are full-length 16S records, contigs, MAG scaffolds, or
+records containing non-target flanking sequence, extract the target rRNA region
+before running autotax2. You may use any external preprocessing workflow. For
+example, barrnap can be used before `prepare-dataset`, but autotax2 does not
+invoke barrnap, validate barrnap versions, or produce barrnap output files.
+
+The FASTA file passed to `prepare-dataset` should look like this:
+
+```text
+>sample_001
+ACGT...
+>sample_002
+ACGT...
+```
+
+Sequences should already represent the target SSU/16S locus. Orientation may be
+handled later by `orient-sina`.
+
+## 3. Installation
+
+After downloading the repository:
 
 ```bash
-gh repo clone ypchan/autotax2
-python -m pip install -e ".[dev]"
+git clone <your-autotax2-repo-url>
+cd autotax2
+python -m pip install -e 
+autotax2 --help
+```
+
+
+Run the test suite:
+
+```bash
 python -m pytest
 ```
 
-## Full Pipeline Quick Start
+## 4. First Complete Build
+
+The following example builds an archaeal reference.
+
+### 4.1 Initialize the SILVA Backbone
 
 ```bash
 autotax2 init \
-  --silva-fasta SILVA_138.2_SSURef_NR99_tax_silva.dna.fasta.gz \
+  --silva-fasta SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz \
+  --type-strain-metadata SILVA_138.2_SSURef_Nr99.full_metadata.gz \
   --outdir autotax2_build \
   --domain Archaea
+```
 
+This creates `autotax2_build/` and separates SILVA records into named,
+unresolved, and rejected categories.
+
+### 4.2 Resolve the SILVA Unresolved Scaffold
+
+```bash
 autotax2 resolve-silva \
   --build autotax2_build \
   --threads 48
+```
 
+This resolves non-domain SILVA unresolved records into SILVA placeholder taxa.
+
+### 4.3 Prepare a Custom Dataset
+
+Assume that external preprocessing has already produced:
+
+```text
+digester2020.ssu.fa
+```
+
+Run:
+
+```bash
 autotax2 prepare-dataset \
   --build autotax2_build \
   --name digester2020 \
   --prefix D20 \
-  --fasta digester2020.intron_free.fa \
-  --domain Archaea \
-  --threads 48 \
-  --strict-tool-version
+  --fasta digester2020.ssu.fa \
+  --domain Archaea
+```
 
+The prefix `D20` is frozen for this dataset. New placeholders created from this
+dataset use names such as:
+
+```text
+g__D20g000001
+s__D20s000001
+```
+
+### 4.4 Correct Orientation with SINA
+
+```bash
 autotax2 orient-sina \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
+```
 
+### 4.5 Cluster and Search with VSEARCH
+
+```bash
 autotax2 cluster-search \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
+```
 
+### 4.6 Place Dataset Representatives
+
+```bash
 autotax2 place \
   --build autotax2_build \
   --dataset digester2020
+```
 
+### 4.7 Export Classifier References
+
+```bash
+autotax2 export all \
+  --build autotax2_build \
+  --gzip
+```
+
+### 4.8 Summarize and Validate
+
+```bash
+autotax2 summarize \
+  --build autotax2_build
+
+autotax2 validate \
+  --build autotax2_build
+```
+
+Before release, use strict validation:
+
+```bash
+autotax2 validate \
+  --build autotax2_build \
+  --strict
+```
+
+## 5. Adding a New Full-Length 16S Dataset
+
+Assume the original file is:
+
+```text
+new_full_length_16s.fa
+```
+
+Recommended workflow:
+
+1. Confirm outside autotax2 that the records represent the target SSU/16S
+   region.
+2. If the file still contains full-length, contig, or flanking sequence, extract
+   the SSU/16S region with an external workflow.
+3. Produce `new_dataset.ssu.fa`.
+4. Run the autotax2 dataset workflow.
+
+If you choose to use barrnap, it belongs in step 2, before `prepare-dataset`.
+From `prepare-dataset` onward, autotax2 accepts only the processed SSU/16S FASTA.
+
+```bash
+autotax2 prepare-dataset \
+  --build autotax2_build \
+  --name new_dataset \
+  --prefix ND1 \
+  --fasta new_dataset.ssu.fa \
+  --domain Bacteria
+
+autotax2 orient-sina \
+  --build autotax2_build \
+  --dataset new_dataset \
+  --threads 48
+
+autotax2 cluster-search \
+  --build autotax2_build \
+  --dataset new_dataset \
+  --threads 48
+
+autotax2 place \
+  --build autotax2_build \
+  --dataset new_dataset
+```
+
+Then regenerate exports and reports:
+
+```bash
 autotax2 export all \
   --build autotax2_build \
   --gzip
@@ -100,344 +250,268 @@ autotax2 validate \
   --build autotax2_build
 ```
 
-See [docs/demo_workflow.md](docs/demo_workflow.md) for a compact runnable demo
-workflow.
+## 6. Adding Multiple Datasets Incrementally
 
-## Data Model
-
-autotax2 uses seven canonical ranks:
+Assume three externally processed SSU/16S FASTA files:
 
 ```text
-domain, phylum, class, order, family, genus, species
+dataset_a.ssu.fa
+dataset_b.ssu.fa
+dataset_c.ssu.fa
 ```
 
-Taxonomy strings are represented as semicolon-separated seven-rank paths. Export
-formatters may add, remove, or rewrite rank prefixes for downstream tools.
-
-Sequence normalization is:
+Assign one unique prefix per dataset:
 
 ```text
-N(seq) = uppercase(remove_whitespace(seq)).replace("U", "T")
-sequence_md5 = MD5(N(seq))
+dataset_a -> A01
+dataset_b -> B01
+dataset_c -> C01
 ```
 
-Internal dataset IDs are assigned in input order:
+Add datasets sequentially. Each dataset should complete `prepare-dataset ->
+orient-sina -> cluster-search -> place` before the next dataset begins, because
+later placement runs use the updated registry produced by earlier datasets.
+
+```bash
+autotax2 prepare-dataset --build autotax2_build --name dataset_a --prefix A01 --fasta dataset_a.ssu.fa --domain Archaea
+autotax2 orient-sina     --build autotax2_build --dataset dataset_a --threads 48
+autotax2 cluster-search  --build autotax2_build --dataset dataset_a --threads 48
+autotax2 place           --build autotax2_build --dataset dataset_a
+
+autotax2 prepare-dataset --build autotax2_build --name dataset_b --prefix B01 --fasta dataset_b.ssu.fa --domain Archaea
+autotax2 orient-sina     --build autotax2_build --dataset dataset_b --threads 48
+autotax2 cluster-search  --build autotax2_build --dataset dataset_b --threads 48
+autotax2 place           --build autotax2_build --dataset dataset_b
+
+autotax2 prepare-dataset --build autotax2_build --name dataset_c --prefix C01 --fasta dataset_c.ssu.fa --domain Archaea
+autotax2 orient-sina     --build autotax2_build --dataset dataset_c --threads 48
+autotax2 cluster-search  --build autotax2_build --dataset dataset_c --threads 48
+autotax2 place           --build autotax2_build --dataset dataset_c
+```
+
+After all additions:
+
+```bash
+autotax2 export all --build autotax2_build --gzip
+autotax2 summarize --build autotax2_build
+autotax2 validate --build autotax2_build --strict
+```
+
+## 7. Handling SILVA Records That Become Unidentified at a Rank
+
+autotax2 parses SILVA taxonomy into seven ranks:
 
 ```text
-internal_seq_id = <prefix> + "_" + zero_pad(input_order, 6)
-example: D20_000001
+domain;phylum;class;order;family;genus;species
 ```
 
-Placeholder names are rank-aware:
+Classification rules:
+
+1. If `domain` is empty, missing, or contains an unresolved token such as
+   `unidentified`, the SILVA record is rejected.
+2. Rejected records are excluded from both the named backbone and unresolved
+   scaffold.
+3. Rejected records are written to:
 
 ```text
-c__SILVAc000001
-o__SILVAo000001
-f__SILVAf000001
-g__SILVAg000001
-s__SILVAs000001
-g__D20g000001
-s__D20s000001
+silva/silva_rejected.tsv
 ```
 
-The general placeholder formula is:
+4. If `domain` is reliable but a lower rank contains unresolved terms such as
+   `unidentified`, `uncultured`, `unknown`, `environmental`, `metagenome`, or
+   `sp.`, the first unresolved rank and all lower ranks are treated as
+   unresolved.
+5. The record is written to:
 
 ```text
-<rank_prefix>__<source_prefix><rank_letter><6_digit_ordinal>
+silva/silva_unresolved.fa
+silva/silva_unresolved.tsv
 ```
 
-`SILVA` is reserved for unresolved SILVA scaffold placeholders. Custom datasets
-must use their frozen dataset prefix.
+6. `resolve-silva` creates SILVA placeholders for supported unresolved ranks.
 
-## Build Directory Layout
+Example:
 
 ```text
-autotax2_build/
-  registry/
-    taxon_nodes.tsv
-    sequence_registry.tsv
-    dataset_registry.tsv
-    name_index.tsv
-    cluster_to_taxon.tsv
-    placeholder_counters.yaml
-    representative_registry.tsv
-    representative_history.tsv
-  silva/
-    silva_named_backbone.fa
-    silva_named_backbone.tax.tsv
-    silva_unresolved.fa
-    silva_unresolved.tsv
-    silva_unresolved_taxa.tsv
-    silva_unresolved_members.tsv
-    silva_unresolved_mapping.tsv
-    silva_unresolved.resolved.fa
-  datasets/
-    01_<dataset>/
-      input.normalized.fa
-      sequence_id_map.tsv
-      unique_sequence_registry.tsv
-      sequence_membership.tsv
-      barrnap.gff3
-      barrnap.extracted.fa
-      barrnap.summary.tsv
-      prepare_summary.tsv
-      sina.oriented.fa
-      sina.summary.tsv
-      internal_clusters/
-      vs_registry.tsv
-      vs_registry.filtered.tsv
-      assignments.tsv
-      created_taxa.tsv
-      placement_summary.tsv
-  export/
-    sintax/
-    qiime2/
-    dada2/
-    export_manifest.tsv
-  reports/
-    global_summary.tsv
-    validation_report.md
+Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;Methanobacteriaceae;unidentified;unidentified
 ```
 
-All project TSVs are tab-delimited with real tab characters and Unix newlines.
-FASTA writers wrap sequence lines at 80 characters.
+Result:
 
-## Command Reference and Algorithm Framework
+```text
+lowest_reliable_rank = family
+unresolved_ranks = genus,species
+genus placeholder = g__SILVAg000001
+species placeholder = s__SILVAs000001
+```
 
-### `autotax2 --help`
+If unresolved taxonomy begins at class, order, or family, all lower ranks are
+also treated as unresolved. The current resolver primarily implements genus and
+species clustering. Family, order, class, and floor threshold options are
+reserved and must remain at their defaults; changing them raises an error so
+users do not mistake reserved controls for completed behavior.
 
-Purpose:
-Show the installed CLI, available commands, and option summaries. This command
-does not read or write project data.
+## 8. Type-Strain Metadata
 
-Input:
-No input files are required.
+When `SILVA_138.2_SSURef_Nr99.full_metadata.gz` is provided, autotax2 attempts
+to identify type-strain or type-material evidence.
 
-Output:
-Rich/Typer help text on standard output.
+Algorithm:
 
-### `autotax2 init`
+```text
+For each named SILVA species:
+  collect all named SILVA sequences assigned to that species
+  if one or more sequences have type-strain or type-material evidence:
+      choose a type-evidence sequence as representative
+      representative_reason = type_strain
+      is_type_strain = true
+  else:
+      choose the first named SILVA sequence for that species
+      representative_reason = first_silva_named_for_species
+```
+
+Implications:
+
+1. Named SILVA taxonomy remains immutable.
+2. Type-evidence named SILVA representatives have the highest representative
+   priority.
+3. Custom datasets cannot overwrite protected named SILVA taxa.
+4. Exports preferentially use the most reliable available representative.
+
+## 9. Command Reference
+
+### 9.1 `autotax2 init`
+
+Purpose: initialize the SILVA backbone.
 
 Example:
 
 ```bash
 autotax2 init \
-  --silva-fasta SILVA_138.2_SSURef_NR99_tax_silva.dna.fasta.gz \
+  --silva-fasta SILVA_138.2_SSURef_NR99_tax_silva.fasta.gz \
+  --type-strain-metadata SILVA_138.2_SSURef_Nr99.full_metadata.gz \
   --outdir autotax2_build \
-  --domain Archaea \
-  --type-strain-metadata type_strains.tsv
+  --domain Archaea
 ```
 
-Purpose:
-Initialize a build from a SILVA-style FASTA file. This step splits SILVA records
-into an immutable named backbone and an unresolved pool that will later become a
-mutable scaffold.
-
-Input requirements:
-
-- `--silva-fasta`: plain FASTA or FASTA.gz.
-- Header format:
+Parameters:
 
 ```text
->AB000393.1.1510 Bacteria;Pseudomonadota;Gammaproteobacteria;Enterobacterales;Vibrionaceae;Vibrio;Vibrio halioticoli
+--silva-fasta            SILVA taxonomy FASTA, plain or gzipped
+--type-strain-metadata   Optional SILVA full_metadata file or autotax2 TSV
+--outdir                 Output build directory
+--domain                 Optional domain filter, for example Archaea or Bacteria
 ```
 
-- The first whitespace-delimited token is the SILVA sequence ID.
-- The text after the first whitespace is parsed as taxonomy.
-- Up to seven semicolon-separated ranks are read. Fewer than seven ranks are
-  padded internally for parsing, but final autotax2 placeholders are not
-  allocated during `init`.
-- `--domain`, if supplied, must match the taxonomy domain exactly, for example
-  `Archaea` or `Bacteria`.
-- `--type-strain-metadata`, if supplied, is a TSV with fields:
+Steps:
 
 ```text
-seq_id, is_type_strain, species_name, strain_id, source, evidence
+1. Read the SILVA FASTA.
+2. Parse seq_id and seven-rank taxonomy from each header.
+3. Reject records with empty or unresolved domain values into silva_rejected.tsv.
+4. Apply --domain filtering when requested.
+5. Classify each retained record as named or unresolved.
+6. Write complete reliable records into the named backbone.
+7. Write non-domain unresolved records into the unresolved scaffold.
+8. Read type-strain metadata when provided.
+9. Build protected taxon_nodes, sequence_registry, and representative_registry.
+10. Initialize placeholder counters and the protected SILVA snapshot.
 ```
 
-Key parameters:
-
-- `--silva-fasta PATH`: required SILVA FASTA input.
-- `--outdir PATH`: required output build directory.
-- `--domain TEXT`: optional domain filter.
-- `--type-strain-metadata PATH`: optional metadata attached by `seq_id`.
-
-Algorithm framework:
-
-1. Read FASTA records and normalize sequence content.
-2. Parse each header into `seq_id` and a seven-rank taxonomy vector:
+Primary outputs:
 
 ```text
-T = (domain, phylum, class, order, family, genus, species)
+silva/silva_named_backbone.fa
+silva/silva_named_backbone.tax.tsv
+silva/silva_unresolved.fa
+silva/silva_unresolved.tsv
+silva/silva_rejected.tsv
+registry/taxon_nodes.tsv
+registry/sequence_registry.tsv
+registry/representative_registry.tsv
+registry/placeholder_counters.tsv
+registry/placeholder_counters.yaml
+registry/protected_taxa_snapshot.tsv
 ```
 
-3. Apply domain filtering if requested:
+### 9.2 `autotax2 resolve-silva`
 
-```text
-keep(record) = taxonomy.domain == requested_domain
-```
-
-4. Detect unresolved ranks using case-insensitive tokens such as
-   `unidentified`, `unclassified`, `uncultured`, `unknown`, `environmental`,
-   `metagenome`, `sample`, `clone`, `bacterium`, `archaeon`, and `organism`.
-5. Treat species strings like `Methanobacterium sp.` as unresolved at species
-   rank only; the genus can remain reliable.
-6. Compute:
-
-```text
-lowest_reliable_rank = rank immediately above the first unresolved rank
-unresolved_ranks = all ranks from the first unresolved rank to species
-is_unresolved = len(unresolved_ranks) > 0
-```
-
-7. Write fully named records to the protected named backbone.
-8. Write unresolved records to the unresolved SILVA pool.
-9. Create protected taxon nodes for named SILVA ranks only.
-10. Attach optional type-strain metadata to `sequence_registry.tsv`.
-
-Main outputs:
-
-- `silva/silva_named_backbone.fa`: named SILVA sequences.
-- `silva/silva_named_backbone.tax.tsv`: fields:
-
-```text
-seq_id, taxonomy_7rank, domain, phylum, class, order, family, genus, species
-```
-
-- `silva/silva_unresolved.fa`: unresolved SILVA sequences.
-- `silva/silva_unresolved.tsv`: fields:
-
-```text
-seq_id, original_taxonomy, domain, phylum, class, order, family, genus,
-species, lowest_reliable_rank, unresolved_ranks, unresolved_reason
-```
-
-- `registry/taxon_nodes.tsv`: protected named SILVA taxon nodes.
-- `registry/sequence_registry.tsv`: SILVA sequence metadata, MD5, original
-  taxonomy, named/unresolved flags, and optional type-strain metadata.
-- `registry/dataset_registry.tsv`: initial SILVA source row.
-- `registry/name_index.tsv`: taxon name lookup.
-- `logs/init.log`: counts and input summary.
-
-### `autotax2 resolve-silva`
+Purpose: resolve SILVA unresolved records into a SILVA placeholder scaffold.
 
 Example:
 
 ```bash
 autotax2 resolve-silva \
   --build autotax2_build \
-  --threads 8 \
-  --iddef 2
+  --threads 48
 ```
 
-Purpose:
-Convert unresolved SILVA records into an active mutable scaffold of SILVA
-placeholder taxa while leaving the named SILVA backbone unchanged.
-
-Input requirements:
-
-- A build previously initialized by `autotax2 init`.
-- `silva/silva_unresolved.fa`
-- `silva/silva_unresolved.tsv`
-- Current registry files under `registry/`.
-- VSEARCH is used when available. In tests or mocked runs, pre-existing `.uc`
-  files can be used.
-
-Key parameters:
-
-- `--build PATH`: required build directory.
-- `--threads INT`: VSEARCH threads, default `4`.
-- `--species-id FLOAT`: species-level cluster threshold, default `0.987`.
-- `--genus-id FLOAT`: genus-level cluster threshold, default `0.945`.
-- `--family-id FLOAT`: reserved threshold, default `0.865`.
-- `--order-id FLOAT`: reserved threshold, default `0.820`.
-- `--class-id FLOAT`: reserved threshold, default `0.785`.
-- `--floor-id FLOAT`: reserved floor, default `0.750`.
-- `--vsearch-bin TEXT`: VSEARCH executable, default `vsearch`.
-- `--iddef INT`: VSEARCH identity definition, default `2`.
-- `--dry-run`: write proposals without registry mutation.
-
-Algorithm framework:
-
-1. Load unresolved SILVA records and unresolved-rank classification.
-2. Cluster unresolved sequences at genus threshold:
+Parameters:
 
 ```text
-vsearch --cluster_fast silva_unresolved.fa --id 0.945 --iddef 2
+--build        Build directory
+--threads      VSEARCH thread count
+--species-id   Species threshold, default 0.987
+--genus-id     Genus threshold, default 0.945
+--vsearch-bin  VSEARCH executable
+--iddef        VSEARCH --iddef value, default 2
+--dry-run      Write proposals without updating the registry
 ```
 
-3. Cluster unresolved sequences at species threshold:
+Reserved parameters:
 
 ```text
-vsearch --cluster_fast silva_unresolved.fa --id 0.987 --iddef 2
+--family-id
+--order-id
+--class-id
+--floor-id
 ```
 
-4. Parse `.uc` cluster assignments. A centroid record `S` starts a cluster; a
-   hit record `H` joins a member to a centroid.
-5. For each unresolved record, preserve all reliable named ranks from the
-   original taxonomy.
-6. For ranks marked unresolved, allocate or reuse SILVA placeholders by
-   `cluster_key`.
-7. Placeholder reuse rule:
+These parameters must currently remain at their defaults.
+
+Algorithm:
 
 ```text
-if active cluster_key exists:
-    reuse its active taxon
-else:
-    allocate the next never-used placeholder ID
+Input:
+  silva_unresolved.fa
+  silva_unresolved.tsv
+
+For each unresolved SILVA record:
+  read lowest_reliable_rank
+  read unresolved_ranks
+
+Cluster unresolved records:
+  species clusters at species_id
+  genus clusters at genus_id
+
+For each unresolved rank:
+  if rank is genus:
+      create or reuse g__SILVAgNNNNNN by genus cluster
+  if rank is species:
+      create or reuse s__SILVAsNNNNNN by species cluster within genus context
+  if rank is class, order, or family:
+      create or reuse a placeholder using the current unresolved cluster context
+
+Never reuse deprecated placeholder IDs.
+Never mutate named SILVA nodes.
 ```
 
-8. Deprecated and superseded placeholder names are treated as burned IDs and
-   are never reused.
-9. If records in the same unresolved cluster come from different original SILVA
-   parent paths, do not fail. Record warning:
+Primary outputs:
 
 ```text
-mixed_silva_parent_unresolved_cluster
-```
-
-10. Write resolved seven-rank taxonomy for each unresolved SILVA sequence.
-
-Main outputs:
-
-- `silva/silva_unresolved_clusters/genus_0.945.uc`
-- `silva/silva_unresolved_clusters/species_0.987.uc`
-- `silva/silva_unresolved_taxa.tsv`: fields:
-
-```text
-taxon_id, rank, name, parent_taxon_id, source, source_prefix, cluster_key,
-status, representative_seq_id, member_count, warning
-```
-
-- `silva/silva_unresolved_members.tsv`: fields:
-
-```text
-seq_id, original_taxonomy, resolved_taxonomy, lowest_reliable_rank,
-unresolved_ranks, genus_placeholder, species_placeholder, cluster_key_genus,
-cluster_key_species, warning
-```
-
-- `silva/silva_unresolved_mapping.tsv`: fields:
-
-```text
-seq_id, original_silva_taxonomy, resolved_autotax2_taxonomy, source,
-source_prefix, placeholder_taxa, warnings
-```
-
-- `silva/silva_unresolved.resolved.fa`: unresolved SILVA sequences with resolved
-  autotax2 taxonomy in headers.
-- Registry updates:
-
-```text
+silva/silva_unresolved_taxa.tsv
+silva/silva_unresolved_members.tsv
+silva/silva_unresolved_mapping.tsv
+silva/silva_unresolved.resolved.fa
 registry/taxon_nodes.tsv
 registry/name_index.tsv
 registry/cluster_to_taxon.tsv
-registry/placeholder_counters.tsv
 ```
 
-Dry-run outputs use `.dry_run.tsv` suffixes and do not update registry counters.
+### 9.3 `autotax2 prepare-dataset`
 
-### `autotax2 prepare-dataset`
+Purpose: register a custom dataset, freeze its prefix, remap sequence IDs, and
+record MD5-based de-duplication membership.
 
 Example:
 
@@ -446,166 +520,65 @@ autotax2 prepare-dataset \
   --build autotax2_build \
   --name digester2020 \
   --prefix D20 \
-  --fasta digester2020.intron_free.fa \
-  --domain Archaea \
-  --threads 8 \
-  --strict-tool-version
+  --fasta digester2020.ssu.fa \
+  --domain Archaea
 ```
 
-Purpose:
-Prepare a custom intron-free dataset for registry search and placement. The
-step freezes the dataset prefix, assigns internal IDs, records MD5 duplicates,
-and uses barrnap to recut rRNA gene boundaries.
-
-Input requirements:
-
-- `--build`: initialized and, usually, SILVA-resolved build directory.
-- `--fasta`: plain FASTA or FASTA.gz containing intron-free input sequences.
-- FASTA headers may repeat; internal IDs remain unique.
-- Sequence normalization uses uppercase, `U -> T`, whitespace removal.
-- By default, normalized sequences containing symbols outside `A/T/G/C` are
-  rejected.
-- `--domain` must be `Archaea` or `Bacteria`.
-- barrnap must be available unless tests provide a mocked `barrnap.gff3`.
-
-Key parameters:
-
-- `--name TEXT`: dataset name, for example `digester2020`.
-- `--prefix TEXT`: frozen prefix, for example `D20`.
-- `--threads INT`: barrnap threads, default `4`.
-- `--barrnap-bin TEXT`: barrnap executable, default `barrnap`.
-- `--barrnap-kingdom TEXT`: optional override. Default mapping:
+Parameters:
 
 ```text
-Archaea -> arc
-Bacteria -> bac
+--build                 Build directory
+--name                  Dataset name
+--prefix                Frozen dataset prefix, for example D20
+--fasta                 Externally processed SSU/16S FASTA
+--domain                Archaea or Bacteria
+--min-ssu-len-archaea   Minimum archaeal SSU/16S length, default 900
+--min-ssu-len-bacteria  Minimum bacterial SSU/16S length, default 1200
+--reject-non-atgc       Reject sequences containing non-ATGC symbols, enabled by default
+--no-reject-non-atgc    Allow non-ATGC symbols into the normalized input
 ```
 
-- `--strict-tool-version`: fail unless barrnap `1.10.5` is detected.
-- `--multi-rrna-policy`: one of `longest`, `best`, `all`, `fail`; default
-  `longest`.
-- `--min-rrna-len-archaea INT`: default `900`.
-- `--min-rrna-len-bacteria INT`: default `1200`.
-- `--flank INT`: extra bases around barrnap hit, default `0`.
-- `--allow-partial`: reserved for partial feature policy.
-- `--reject-non-atgc/--no-reject-non-atgc`: default reject non-ATGC.
-
-Algorithm framework:
-
-1. Validate dataset name and prefix.
-2. Check prefix freezing rules:
+Steps:
 
 ```text
-same dataset + different prefix -> fail
-same prefix + different dataset -> fail
-prefix SILVA for custom data -> invalid
+1. Validate that the dataset name is not empty.
+2. Validate that the prefix is legal and not assigned to another dataset.
+3. Record the input FASTA MD5.
+4. Read the input FASTA.
+5. Remap original IDs to prefix_000001, prefix_000002, and so on.
+6. Convert sequence letters to uppercase and replace U with T.
+7. Mark non_atgc records when reject_non_atgc is enabled.
+8. Mark short_ssu records when length is below the domain-specific threshold.
+9. Write input.normalized.fa.
+10. Write accepted records to prepared.ssu.fa.
+11. Compute sequence MD5 values.
+12. Write unique_sequence_registry.tsv and sequence_membership.tsv.
+13. Write prepare_summary.tsv.
 ```
 
-3. Compute input file MD5 and assign dataset add order. First custom dataset is
-   written under `datasets/01_<name>/`.
-4. Read input FASTA, normalize sequences, and assign IDs:
+Important behavior:
 
 ```text
-D20_000001, D20_000002, ...
+autotax2 does not run external sequence extraction tools.
+autotax2 does not write extraction-tool GFF3 files.
+autotax2 does not check external extraction-tool versions.
+prepared.ssu.fa is the input for downstream SINA and VSEARCH steps.
 ```
 
-5. Compute sequence MD5 from normalized full input sequence:
+Primary outputs:
 
 ```text
-md5_i = MD5(N(seq_i))
+datasets/01_<dataset>/input.normalized.fa
+datasets/01_<dataset>/prepared.ssu.fa
+datasets/01_<dataset>/sequence_id_map.tsv
+datasets/01_<dataset>/unique_sequence_registry.tsv
+datasets/01_<dataset>/sequence_membership.tsv
+datasets/01_<dataset>/prepare_summary.tsv
 ```
 
-6. Build local unique-sequence and membership tables. A duplicate has the same
-   `sequence_md5` as an earlier accepted record but keeps its own internal ID.
-7. Write `input.normalized.fa` using internal IDs.
-8. Run barrnap:
+### 9.4 `autotax2 orient-sina`
 
-```text
-barrnap --kingdom arc --threads N input.normalized.fa > barrnap.gff3
-```
-
-9. Parse GFF3 records with fields:
-
-```text
-seqid, source, type, start, end, score, strand, phase, attributes
-```
-
-10. Keep flexible SSU/16S/rRNA features, including labels such as `16S_rRNA`,
-    `SSU_rRNA`, `16S ribosomal RNA`, and `small subunit ribosomal RNA`.
-11. For each sequence, select hits:
-
-```text
-longest: choose max(end - start + 1)
-best: choose max(score), fallback to longest
-all: emit every rRNA hit with _rrna1, _rrna2 suffixes
-fail: reject if more than one rRNA hit exists
-```
-
-12. Recut interval using 1-based inclusive GFF3 coordinates:
-
-```text
-cut_start = max(1, start - flank)
-cut_end   = min(sequence_length, end + flank)
-slice     = sequence[cut_start - 1 : cut_end]
-```
-
-13. If `strand == "-"`, reverse-complement the extracted sequence.
-14. Apply domain-specific length filter:
-
-```text
-Archaea: extracted_length >= 900 by default
-Bacteria: extracted_length >= 1200 by default
-```
-
-Main outputs:
-
-- `datasets/NN_<name>/input.normalized.fa`: accepted normalized full sequences.
-- `sequence_id_map.tsv`: fields:
-
-```text
-internal_seq_id, original_seq_id, original_header, dataset, prefix,
-input_order, sequence_md5, input_length, normalized_length, rejected,
-reject_reason
-```
-
-- `unique_sequence_registry.tsv`: fields:
-
-```text
-unique_seq_id, sequence_md5, representative_internal_seq_id, sequence,
-length, first_seen_dataset
-```
-
-- `sequence_membership.tsv`: fields:
-
-```text
-internal_seq_id, original_seq_id, dataset, prefix, sequence_md5,
-unique_seq_id, is_duplicate_sequence
-```
-
-- `barrnap.gff3`: raw barrnap feature output.
-- `barrnap.log`: barrnap stderr or mock note.
-- `barrnap.extracted.fa`: recut rRNA sequences.
-- `barrnap.summary.tsv`: fields:
-
-```text
-internal_seq_id, extracted_seq_id, original_seq_id, dataset, domain,
-input_length, hit_count, selected_hit_index, barrnap_type, barrnap_start,
-barrnap_end, barrnap_strand, barrnap_score, extracted_start, extracted_end,
-extracted_length, reverse_complemented, status, warning
-```
-
-- `prepare_summary.tsv`: fields:
-
-```text
-dataset, prefix, input_sequences, normalized_sequences, rejected_non_atgc,
-duplicate_md5_sequences, barrnap_extracted, no_barrnap_hit,
-multiple_rrna_hits, rejected_short_rrna, final_prepared_sequences
-```
-
-- `tool_versions.tsv`: barrnap version/status/command.
-- `registry/dataset_registry.tsv`: frozen dataset registration.
-
-### `autotax2 orient-sina`
+Purpose: correct prepared SSU/16S sequence orientation with SINA.
 
 Example:
 
@@ -613,85 +586,47 @@ Example:
 autotax2 orient-sina \
   --build autotax2_build \
   --dataset digester2020 \
-  --threads 8
+  --threads 48
 ```
 
-Purpose:
-Use SINA with loose settings to support orientation correction. This step keeps
-internal sequence IDs stable. SINA failures are non-fatal by default.
-
-Input requirements:
-
-- Prepared dataset directory.
-- `datasets/NN_<dataset>/barrnap.extracted.fa`
-- Optional SINA reference/PTDB path.
-
-Key parameters:
-
-- `--threads INT`: SINA threads, default `4`.
-- `--sina-bin TEXT`: SINA executable, default `sina`.
-- `--reference PATH`: optional reference passed as `--ptdb`.
-- `--strict-tool-version`: fail if SINA version cannot be detected.
-- `--allow-sina-failure/--no-allow-sina-failure`: default allow failure.
-- `--fallback-copy-original/--no-fallback-copy-original`: default copy original
-  records if SINA fails or omits an ID.
-- `--min-sina-identity FLOAT`: reserved loose confidence threshold.
-- `--min-sina-score FLOAT`: reserved loose confidence threshold.
-
-Algorithm framework:
-
-1. Read `barrnap.extracted.fa`.
-2. Build a loose command:
+Parameters:
 
 ```text
-sina -i barrnap.extracted.fa -o sina.oriented.fa --threads N
+--build                       Build directory
+--dataset                     Prepared dataset name
+--threads                     SINA thread count
+--sina-bin                    SINA executable
+--reference                   Optional SINA reference/PTDB path
+--strict-tool-version         Fail if SINA version cannot be detected
+--allow-sina-failure          Allow fallback behavior when SINA fails
+--no-allow-sina-failure       Fail immediately when SINA fails
+--fallback-copy-original      Copy prepared FASTA records when SINA output is missing
+--no-fallback-copy-original   Disable fallback copying
 ```
 
-3. If `--reference` is supplied, append:
+Steps:
 
 ```text
---ptdb <reference>
+1. Read prepared.ssu.fa.
+2. Run SINA.
+3. Read sina.oriented.fa.
+4. Compare original and SINA output records to infer plus, minus, or unknown strand.
+5. Copy prepared.ssu.fa as fallback output when SINA fails and fallback is allowed.
+6. Write sina.summary.tsv.
 ```
 
-4. Run `sina --version` and record the detected value if parseable.
-5. If SINA fails and failure is allowed with fallback enabled, copy all input
-   records to `sina.oriented.fa` and mark them uncertain.
-6. If SINA succeeds, read output FASTA and compare each output record to input:
+Primary outputs:
 
 ```text
-output == input             -> strand plus, confidence high
-output == reverse_complement(input) -> strand minus, confidence high
-otherwise                   -> oriented_modified, confidence low
-missing output              -> fallback original if enabled
+datasets/01_<dataset>/sina.oriented.fa
+datasets/01_<dataset>/sina.summary.tsv
+datasets/01_<dataset>/tool_versions.tsv
 ```
 
-7. Preserve input sequence IDs exactly.
+### 9.5 `autotax2 cluster-search`
 
-Main outputs:
-
-- `sina.oriented.fa`: oriented or fallback sequences.
-- `sina.summary.tsv`: fields:
-
-```text
-internal_seq_id, dataset, input_length, output_length, sina_status, strand,
-orientation_confidence, sequence_changed, fallback_used, warning
-```
-
-- `sina.log`: SINA stderr or failure text.
-- `tool_versions.tsv`: SINA version/status/command row.
-
-Status values:
-
-```text
-oriented
-oriented_modified
-orientation_uncertain
-sina_missing_output
-sina_failed_fallback_original
-failed
-```
-
-### `autotax2 cluster-search`
+Purpose: cluster the dataset internally and search dataset representatives
+against the current registry representatives.
 
 Example:
 
@@ -699,789 +634,360 @@ Example:
 autotax2 cluster-search \
   --build autotax2_build \
   --dataset digester2020 \
-  --threads 16 \
-  --iddef 2 \
-  --strand plus
+  --threads 48
 ```
 
-Purpose:
-Cluster oriented dataset sequences at rank-aware thresholds and search species
-centroids against the current registry representatives. This step keeps multiple
-passing hits for later near-best consensus.
-
-Input requirements:
-
-- `datasets/NN_<dataset>/sina.oriented.fa`
-- Current registry files.
-- Existing or buildable `registry/current_representatives.fa`.
-- VSEARCH executable unless tests provide mocked output files.
-
-Key parameters:
-
-- `--threads INT`: VSEARCH threads, default `4`.
-- `--vsearch-bin TEXT`: VSEARCH executable, default `vsearch`.
-- `--strict-tool-version`: fail if VSEARCH version cannot be parsed.
-- `--iddef INT`: identity definition, default `2`.
-- `--species-id FLOAT`: default `0.987`.
-- `--genus-id FLOAT`: default `0.945`.
-- `--family-id FLOAT`: default `0.865`.
-- `--order-id FLOAT`: default `0.820`.
-- `--class-id FLOAT`: default `0.785`.
-- `--floor-id FLOAT`: registry search identity floor, default `0.750`.
-- `--min-query-cov FLOAT`: default `0.80`.
-- `--min-target-cov FLOAT`: default `0.0`.
-- `--maxaccepts INT`: default `50`.
-- `--maxrejects INT`: default `256`.
-- `--near-best-delta FLOAT`: recorded for placement, default `0.005`.
-- `--strand plus|both`: default `plus`.
-
-Algorithm framework:
-
-1. Check VSEARCH version and record it.
-2. Independently cluster `sina.oriented.fa` at each rank threshold:
+Parameters:
 
 ```text
-vsearch --cluster_fast sina.oriented.fa \
-  --id threshold \
-  --iddef 2 \
-  --centroids <rank>_<threshold>.centroids.fa \
-  --uc <rank>_<threshold>.uc \
-  --threads N
+--build                 Build directory
+--dataset               Prepared and oriented dataset name
+--threads               VSEARCH thread count
+--vsearch-bin           VSEARCH executable
+--strict-tool-version   Fail if VSEARCH version cannot be detected
+--iddef                 VSEARCH --iddef value, default 2
+--species-id            Species threshold, default 0.987
+--genus-id              Genus threshold, default 0.945
+--family-id             Family threshold, default 0.865
+--order-id              Order threshold, default 0.820
+--class-id              Class threshold, default 0.785
+--floor-id              Minimum registry search threshold, default 0.750
+--min-query-cov         Minimum query coverage, default 0.80
+--min-target-cov        Minimum target coverage, default 0.0
+--maxaccepts            VSEARCH --maxaccepts value
+--maxrejects            VSEARCH --maxrejects value
+--near-best-delta       Near-best hit retention delta, default 0.005
+--strand                plus or both
 ```
 
-3. Current thresholds:
+Algorithm:
 
 ```text
-species 0.987
-genus   0.945
-family  0.865
-order   0.820
-class   0.785
+Input:
+  sina.oriented.fa
+  registry/representative_registry.tsv
+  registry/sequence_registry.tsv
+
+Build current representatives:
+  prefer durable representative registry records
+  include named SILVA representatives
+  include active placeholder and custom representatives
+  avoid stale cached representatives when durable sources are available
+
+Internal clustering:
+  run VSEARCH at species, genus, family, order, and class thresholds
+  write .uc membership files
+
+Registry search:
+  search oriented dataset representatives against current representatives
+  keep hits that pass identity and coverage filters
+  retain near-best hits for placement consensus
 ```
 
-4. Parse `.uc` records:
+Primary outputs:
 
 ```text
-S = centroid/seed record
-H = hit/member record
-cluster_id = UC cluster number
-centroid_id = seed label
-member_id = query label
-identity_to_centroid = percent identity for H, 100 for S
+datasets/01_<dataset>/internal_clusters/
+datasets/01_<dataset>/vs_registry.raw.tsv
+datasets/01_<dataset>/vs_registry.filtered.tsv
+datasets/01_<dataset>/cluster_search_summary.tsv
+registry/current_representatives.fa
 ```
 
-5. Build registry representatives if missing, using active SILVA named,
-   resolved SILVA unresolved, and earlier custom dataset records.
-6. Search species centroids against current registry representatives:
+### 9.6 `autotax2 place`
 
-```text
-vsearch --usearch_global species_0.987.centroids.fa \
-  --db registry/current_representatives.fa \
-  --id 0.750 \
-  --iddef 2 \
-  --maxaccepts 50 \
-  --maxrejects 256 \
-  --strand plus \
-  --userout vs_registry.raw.tsv \
-  --userfields query+target+id+alnlen+qlo+qhi+tlo+thi+ql+tl+bits
-```
-
-7. Compute coverage:
-
-```text
-query_coverage  = alnlen / query_length
-target_coverage = alnlen / target_length
-```
-
-8. Filter hits:
-
-```text
-identity >= floor_id
-query_coverage >= min_query_cov
-target_coverage >= min_target_cov
-```
-
-9. Preserve all passing hits. Do not collapse to the best hit.
-
-Main outputs:
-
-- `internal_clusters/species_0.987.uc`
-- `internal_clusters/species_0.987.centroids.fa`
-- `internal_clusters/species_0.987.members.tsv`
-- Equivalent genus/family/order/class `.uc`, `.centroids.fa`, `.members.tsv`
-  files.
-- Cluster member TSV fields:
-
-```text
-cluster_id, centroid_id, member_id, identity_to_centroid, record_type,
-rank_threshold
-```
-
-- `vs_registry.tsv`: raw parsed registry hits.
-- `vs_registry.filtered.tsv`: passing registry hits.
-- Registry hit fields:
-
-```text
-query, target, identity, alnlen, qlo, qhi, tlo, thi, ql, tl, bits,
-query_coverage, target_coverage
-```
-
-- `cluster_search_summary.tsv`: fields:
-
-```text
-dataset, prefix, input_sequences, species_centroids, genus_centroids,
-family_centroids, order_centroids, class_centroids, registry_representatives,
-registry_hits_raw, registry_hits_filtered, iddef, min_query_cov,
-min_target_cov, near_best_delta, vsearch_version
-```
-
-- `tool_versions.tsv`: VSEARCH version/status/command row.
-
-### `autotax2 place`
+Purpose: place dataset representatives into the current rank-aware registry.
 
 Example:
 
 ```bash
 autotax2 place \
   --build autotax2_build \
-  --dataset digester2020 \
-  --near-best-delta 0.005 \
-  --rank-consensus 0.80
+  --dataset digester2020
 ```
 
-Purpose:
-Place dataset representative sequences into the current rank-aware taxonomy
-registry by combining identity thresholds with near-best hit consensus.
-
-Input requirements:
-
-- `vs_registry.filtered.tsv`
-- `internal_clusters/species_0.987.uc`
-- `sequence_membership.tsv`
-- `sequence_id_map.tsv`
-- Registry files:
+Parameters:
 
 ```text
-taxon_nodes.tsv
-sequence_registry.tsv
-representative_registry.tsv
-name_index.tsv
-placeholder_counters.yaml
-cluster_to_taxon.tsv
-dataset_registry.tsv
+--build                 Build directory
+--dataset               Cluster-searched dataset name
+--near-best-delta       Identity delta for retaining near-best hits, default 0.005
+--rank-consensus        Minimum near-best agreement fraction, default 0.80
+--species-id            Known-like species threshold, default 0.987
+--genus-id              New species threshold, default 0.945
+--family-id             New genus threshold, default 0.865
+--order-id              New family threshold, default 0.820
+--class-id              New order threshold, default 0.785
+--floor-id              Minimum placement search threshold, default 0.750
+--dry-run               Write proposed placements without updating the registry
+--allow-ambiguous       Allow ambiguous records to be written
+--no-allow-ambiguous    Fail when a record is ambiguous
 ```
 
-Key parameters:
-
-- `--near-best-delta FLOAT`: default `0.005`.
-- `--rank-consensus FLOAT`: default `0.80`.
-- `--species-id FLOAT`: known-like boundary, default `0.987`.
-- `--genus-id FLOAT`: new-species boundary, default `0.945`.
-- `--family-id FLOAT`: new-genus boundary, default `0.865`.
-- `--order-id FLOAT`: new-family boundary, default `0.820`.
-- `--class-id FLOAT`: new-order boundary, default `0.785`.
-- `--floor-id FLOAT`: minimum placement identity, default `0.750`.
-- `--dry-run`: write proposed outputs without registry mutation.
-- `--allow-ambiguous/--no-allow-ambiguous`: default allow ambiguous rows.
-
-Algorithm framework:
-
-1. Load dataset prefix from `dataset_registry.tsv`.
-2. Load taxon tree, representatives, sequence membership, and filtered hits.
-3. Detect duplicate MD5 sequences already present in the registry. Duplicates
-   receive final status `duplicate` and do not create new taxa.
-4. For each query representative, compute:
+Algorithm:
 
 ```text
-best_identity(q) = max(identity(q, target))
+For each query representative:
+  if an exact MD5 duplicate already exists:
+      final_status = duplicate
+      do not export the duplicate sequence repeatedly
+  else:
+      best_identity = maximum identity among filtered hits
+      near_best_hits = hits where identity >= best_identity - near_best_delta
+
+For each rank:
+  count taxon IDs among near_best_hits
+  consensus_fraction = top_count / near_best_hit_count
+  stable = consensus_fraction >= rank_consensus
+
+Identity status:
+  identity >= species_id -> known_like
+  identity >= genus_id   -> new_species
+  identity >= family_id  -> new_genus
+  identity >= order_id   -> new_family
+  identity >= class_id   -> new_order
+  identity >= floor_id   -> new_class
+  otherwise              -> unplaced
+
+Placement decision:
+  known_like requires stable species consensus
+  new_species requires stable genus consensus
+  new_genus requires stable family consensus
+  higher novelty uses the nearest stable higher rank
+  unstable required consensus may produce an ambiguous final status
 ```
 
-5. Retain near-best hits:
+Primary outputs:
 
 ```text
-H_nb(q) = {h | identity(h) >= best_identity(q) - near_best_delta}
+datasets/01_<dataset>/assignments.tsv
+datasets/01_<dataset>/created_taxa.tsv
+datasets/01_<dataset>/near_best_consensus.tsv
+datasets/01_<dataset>/placement_summary.tsv
+registry/taxon_nodes.tsv
+registry/representative_registry.tsv
+registry/cluster_to_taxon.tsv
 ```
 
-6. For each rank `r`, compute consensus:
+### 9.7 `autotax2 export`
 
-```text
-fraction_r(t) = count(h in H_nb with taxon_r(h) == t) / len(H_nb)
-consensus_r = argmax_t fraction_r(t)
-stable_r = fraction_r(consensus_r) >= rank_consensus
-```
+Purpose: export classifier-ready reference files.
 
-7. The lowest stable rank is the lowest rank, from species upward to domain,
-   where `stable_r` is true.
-8. Convert best identity to initial status:
-
-```text
-x >= species_id -> known_like
-x >= genus_id   -> new_species
-x >= family_id  -> new_genus
-x >= order_id   -> new_family
-x >= class_id   -> new_order
-x >= floor_id   -> new_class
-else            -> unplaced
-```
-
-9. Combine identity status with consensus. Examples:
-
-```text
-known_like + stable species -> assign existing species
-known_like + unstable species + stable genus -> create new species
-new_species + stable genus -> create species under that genus
-new_species + unstable genus + stable family -> create genus + species
-new_genus + stable family -> create genus + species
-no stable safe parent -> ambiguous
-no hit above floor -> unplaced
-```
-
-10. New dataset placeholders use the frozen dataset prefix:
-
-```text
-s__D20s000001
-g__D20g000001
-f__D20f000001
-```
-
-11. New taxon cluster keys include source prefix, rank, parent, threshold, and
-    query/member identity context. Existing active cluster keys are reused.
-12. Newly created species-level taxa receive the current query representative.
-    SILVA named representatives are not replaced.
-
-Main outputs:
-
-- `assignments.tsv`: fields:
-
-```text
-internal_seq_id, original_seq_id, dataset, prefix, sequence_md5,
-is_duplicate_sequence, best_hit_id, best_hit_identity, best_hit_taxon_id,
-best_hit_taxonomy, best_hit_source_category, near_best_hit_count,
-domain_consensus, domain_consensus_fraction, phylum_consensus,
-phylum_consensus_fraction, class_consensus, class_consensus_fraction,
-order_consensus, order_consensus_fraction, family_consensus,
-family_consensus_fraction, genus_consensus, genus_consensus_fraction,
-species_consensus, species_consensus_fraction, lowest_stable_rank,
-identity_status, final_status, assigned_taxon_id, assigned_taxonomy,
-created_taxon_ids, warning
-```
-
-- `created_taxa.tsv`: fields:
-
-```text
-taxon_id, rank, name, parent_taxon_id, source, source_prefix,
-created_in_dataset, cluster_key, status, representative_seq_id
-```
-
-- `near_best_consensus.tsv`: fields:
-
-```text
-internal_seq_id, best_identity, near_best_delta, near_best_hit_count,
-rank, consensus_taxon_id, consensus_name, consensus_fraction, hit_count,
-stable
-```
-
-- `representative_updates.tsv`: fields:
-
-```text
-representative_seq_id, taxon_id, dataset, action, reason
-```
-
-- `placement_summary.tsv`: fields:
-
-```text
-dataset, prefix, input_representatives, duplicate, known_like, new_species,
-new_genus, new_family, new_order, new_class, ambiguous, unplaced,
-assigned_named_silva, assigned_unresolved_silva, assigned_previous_custom,
-new_current_dataset, created_species, created_genera, created_families,
-created_orders, created_classes
-```
-
-- Registry updates:
-
-```text
-taxon_nodes.tsv
-name_index.tsv
-cluster_to_taxon.tsv
-placeholder_counters.yaml
-representative_registry.tsv
-representative_history.tsv
-sequence_registry.tsv
-```
-
-Placement statuses:
-
-```text
-duplicate
-known_like
-new_species
-new_genus
-new_family
-new_order
-new_class
-ambiguous
-unplaced
-```
-
-### `autotax2 export`
-
-Examples:
+Example:
 
 ```bash
-autotax2 export sintax --build autotax2_build
-autotax2 export qiime2 --build autotax2_build
-autotax2 export dada2 --build autotax2_build
-autotax2 export all --build autotax2_build --gzip
+autotax2 export all \
+  --build autotax2_build \
+  --gzip
 ```
 
-Purpose:
-Export active reference records in downstream classifier formats. The default is
-representative-only export with MD5 de-duplication.
-
-Input requirements:
-
-- Complete registry taxon tree and sequence registry.
-- Active representative registry for representative-only export.
-- Each exported record must resolve to exactly seven ranks:
+Parameters:
 
 ```text
-domain;phylum;class;order;family;genus;species
+format_name             all, sintax, qiime2, or dada2
+--build                 Build directory
+--outdir                Output directory, default <build>/export
+--gzip / --no-gzip      Whether FASTA outputs are gzipped
+--representatives-only  Export active representatives only
+--all-unique            Export all active unique MD5 sequences
+--prefix                Output filename prefix, default autotax2
+--force                 Overwrite existing output files
 ```
 
-- Deprecated and superseded taxa are skipped by default.
-
-Key parameters:
-
-- `format_name`: `sintax`, `qiime2`, `dada2`, or `all`.
-- `--build PATH`: required build directory.
-- `--outdir PATH`: default `<build>/export`.
-- `--gzip/--no-gzip`: default gzip FASTA outputs.
-- `--representatives-only/--all-unique`: default representatives only.
-- `--prefix TEXT`: output filename prefix, default `autotax2`.
-- `--force`: overwrite existing export files.
-
-Algorithm framework:
-
-1. Build exportable candidate records from active representatives or all active
-   unique records.
-2. Resolve each candidate to sequence, MD5, taxon ID, and seven-rank taxonomy.
-3. Skip repeated MD5 values:
+Outputs:
 
 ```text
-export(record_i) only if sequence_md5_i not in seen_md5
+export/sintax/autotax2.sintax.fa.gz
+export/qiime2/reference_sequences.fasta.gz
+export/qiime2/reference_taxonomy.tsv
+export/dada2/autotax2_toGenus_trainset.fa.gz
+export/dada2/autotax2_assignSpecies.fa.gz
+export/export_manifest.tsv
+export/export_validation.tsv
 ```
 
-4. Validate the seven-rank taxonomy.
-5. Apply format-specific taxonomy transformation.
-6. Write FASTA/TSV outputs and `export_manifest.tsv`.
-
-SINTAX output:
-
-- Path: `export/sintax/autotax2.sintax.fa.gz`
-- Header format:
+Format contract:
 
 ```text
->seq001;tax=d:Archaea,p:Thermoproteota,c:Nitrososphaeria,o:Nitrososphaerales,f:Nitrososphaeraceae,g:SILVAg000001,s:SILVAs000001;
+SINTAX:
+  headers contain ;tax=d:...,p:...,c:...,o:...,f:...,g:...,s:...
+  tax values do not contain g__ or s__ prefixes
+
+QIIME 2:
+  reference_sequences.fasta(.gz)
+  reference_taxonomy.tsv with header Feature ID<TAB>Taxon
+
+DADA2 toGenus:
+  FASTA headers contain semicolon-delimited taxonomy through genus
+
+DADA2 assignSpecies:
+  FASTA headers contain clean genus species names
+  headers do not contain g__ or s__ prefixes
 ```
 
-- SINTAX values strip rank prefixes:
+`export` automatically performs format self-checks after writing output files.
+No additional command is required. The report is written to:
 
 ```text
-g__SILVAg000001 -> SILVAg000001
+export/export_validation.tsv
 ```
 
-- SINTAX taxonomy must contain `d:,p:,c:,o:,f:,g:,s:` and must not contain
-  `d__`, `g__`, or `s__` inside tax values.
+If a newly exported SINTAX, QIIME 2, or DADA2 file fails the format contract,
+`export` exits with an error and records the failure in `export_validation.tsv`.
 
-QIIME2 output:
+### 9.8 `autotax2 summarize`
 
-- `export/qiime2/reference_sequences.fasta.gz`
-- `export/qiime2/reference_taxonomy.tsv`
-- Taxonomy TSV fields:
-
-```text
-Feature ID<TAB>Taxon
-```
-
-- Taxonomy format:
-
-```text
-d__Archaea; p__Thermoproteota; c__Nitrososphaeria; o__Nitrososphaerales; f__Nitrososphaeraceae; g__SILVAg000001; s__SILVAs000001
-```
-
-DADA2 output:
-
-- `export/dada2/autotax2_toGenus_trainset.fa.gz`
-- `export/dada2/autotax2_assignSpecies.fa.gz`
-- toGenus header:
-
-```text
->seq001 Archaea;Thermoproteota;Nitrososphaeria;Nitrososphaerales;Nitrososphaeraceae;SILVAg000001
-```
-
-- assignSpecies header:
-
-```text
->seq001 SILVAg000001 SILVAs000001
->AB000393 Vibrio halioticoli
->D20_000001 D20g000001 D20s000001
-```
-
-- assignSpecies headers must contain at least `seq_id Genus Species`, no
-  semicolon taxonomy, and no `g__` or `s__` prefixes.
-
-Export manifest fields:
-
-```text
-format, path, gzip, representatives_only, records_exported,
-unique_md5_exported, created_at, autotax2_version,
-registry_version_or_build_id
-```
-
-Downstream examples:
-
-```bash
-vsearch --sintax query.fa \
-  --db autotax2_build/export/sintax/autotax2.sintax.fa.gz \
-  --tabbedout query.sintax.tsv \
-  --sintax_cutoff 0.8 \
-  --strand both \
-  --threads 16
-```
-
-```bash
-qiime tools import \
-  --type 'FeatureData[Sequence]' \
-  --input-path autotax2_build/export/qiime2/reference_sequences.fasta.gz \
-  --output-path autotax2-ref-seqs.qza
-
-qiime tools import \
-  --type 'FeatureData[Taxonomy]' \
-  --input-format HeaderlessTSVTaxonomyFormat \
-  --input-path autotax2_build/export/qiime2/reference_taxonomy.tsv \
-  --output-path autotax2-taxonomy.qza
-```
-
-```r
-taxa <- assignTaxonomy(seqtab, "autotax2_build/export/dada2/autotax2_toGenus_trainset.fa.gz")
-taxa <- addSpecies(taxa, "autotax2_build/export/dada2/autotax2_assignSpecies.fa.gz")
-```
-
-### `autotax2 summarize`
+Purpose: generate global summaries and dataset-level delta reports.
 
 Example:
 
 ```bash
 autotax2 summarize \
+  --build autotax2_build
+```
+
+Parameters:
+
+```text
+--build       Build directory
+--outdir      Report directory, default <build>/reports
+--overwrite   Overwrite existing report files
+```
+
+Outputs:
+
+```text
+reports/global_summary.tsv
+reports/dataset_delta_summary.tsv
+reports/dataset_overlap_matrix.tsv
+reports/source_contributions.tsv
+reports/representative_summary.tsv
+reports/deduplication_summary.tsv
+```
+
+### 9.9 `autotax2 validate`
+
+Purpose: validate build invariants and export compatibility.
+
+Example:
+
+```bash
+autotax2 validate \
   --build autotax2_build \
-  --overwrite
+  --strict
 ```
 
-Purpose:
-Create global reporting tables for a build. These reports summarize registry
-size, custom dataset deltas, overlap, novelty, source contributions,
-representatives, and MD5 de-duplication.
-
-Input requirements:
-
-- Build directory with registry files.
-- Optional dataset outputs from `prepare-dataset`, `orient-sina`,
-  `cluster-search`, and `place`.
-
-Key parameters:
-
-- `--build PATH`: required build directory.
-- `--outdir PATH`: default `<build>/reports`.
-- `--overwrite`: allow replacing existing report files.
-
-Algorithm framework:
-
-1. Load active taxon nodes, sequence registry, dataset registry, and active
-   representative registry.
-2. Count active/deprecated/superseded taxa by rank.
-3. For each custom dataset, read preparation and placement summaries.
-4. Compute exact-sequence overlap by MD5.
-5. Compute rank-level overlap by walking assigned taxon ancestors.
-6. Group sources into:
+Parameters:
 
 ```text
-named_silva
-unresolved_silva
-previous_custom
-current_dataset
+--build              Build directory
+--strict             Treat selected warnings as failures
+--check-exports      Validate existing export files when present
+--no-check-exports   Skip export validation
+--report             Markdown report path
 ```
 
-7. Compute overlap fraction:
+Validation checks:
 
 ```text
-overlap_fraction = overlap_count / query_total
+1. Named SILVA protected taxa remain immutable.
+2. Placeholder IDs are unique.
+3. Deprecated placeholders are not reused.
+4. Dataset prefixes are unique and frozen.
+5. Sequence MD5 and duplicate accounting are internally consistent.
+6. Representative registry rows point to valid taxa and sequences.
+7. Export files satisfy the SINTAX, QIIME 2, and DADA2 format contracts.
+8. SINA and VSEARCH metadata are traceable.
+9. Existing export files pass the same export self-check logic used by export.
 ```
 
-8. Write one TSV per report.
-
-Main outputs:
-
-- `reports/global_summary.tsv`: fields:
+Outputs:
 
 ```text
-build_dir, autotax2_version, registry_version_or_build_id,
-silva_named_sequences, silva_unresolved_sequences,
-silva_unresolved_active_placeholders, custom_datasets,
-custom_input_sequences, custom_unique_sequences, duplicate_sequences,
-active_taxa_total, active_species, active_genera, active_families,
-active_orders, active_classes, active_representatives, deprecated_taxa,
-superseded_taxa
+reports/validation_report.md
+reports/validation_report.tsv
 ```
 
-- `reports/dataset_delta_summary.tsv`: one row per custom dataset with fields:
+### 9.10 `autotax2 add`
+
+`add` is currently a placeholder command, not the recommended workflow entry
+point. Use the explicit command sequence:
 
 ```text
-dataset, prefix, add_order, input_sequences, normalized_sequences,
-barrnap_extracted, oriented_sequences, unique_md5_sequences,
-duplicate_sequences, assigned_named_silva, assigned_unresolved_silva,
-assigned_previous_custom, new_current_dataset, known_like, new_species,
-new_genus, new_family, new_order, new_class, ambiguous, unplaced,
-created_species, created_genera, created_families, created_orders,
-created_classes, representatives_added
+prepare-dataset -> orient-sina -> cluster-search -> place
 ```
 
-- `reports/dataset_overlap_matrix.tsv`: fields:
+## 10. Build Directory Layout
+
+Typical build directory:
 
 ```text
-query_dataset, query_prefix, compared_source, compared_source_type, rank,
-overlap_count, query_total, overlap_fraction
+autotax2_build/
+  silva/
+  registry/
+  datasets/
+    01_digester2020/
+    02_nextdataset/
+  export/
+  reports/
+  logs/
 ```
 
-- `reports/rank_novelty_summary.tsv`: fields:
+Major CLI commands write dated audit logs, for example:
 
 ```text
-dataset, prefix, rank, created_taxa, assigned_existing_taxa, ambiguous,
-unplaced
+logs/prepare-dataset_date20260510153022.log
+logs/place_date20260510153210.log
+logs/export_date20260510153503.log
 ```
 
-- `reports/source_contribution.tsv`: fields:
+Each audit log is a simple `key=value` text file containing the command,
+timestamp, dataset, output paths, and key counts.
+
+Key registry files:
 
 ```text
-source, source_type, sequences, unique_sequences, representatives,
-active_taxa, active_species, active_genera, active_families, active_orders,
-active_classes
+registry/taxon_nodes.tsv
+registry/sequence_registry.tsv
+registry/representative_registry.tsv
+registry/cluster_to_taxon.tsv
+registry/name_index.tsv
+registry/placeholder_counters.tsv
+registry/protected_taxa_snapshot.tsv
 ```
 
-- `reports/representative_summary.tsv`: fields:
+## 11. Frequently Asked Questions
 
-```text
-taxon_id, rank, taxon_name, representative_seq_id, representative_source,
-representative_dataset, representative_reason, is_type_strain, protected,
-sequence_length, sequence_md5
-```
+### 11.1 Do externally processed 16S datasets need to be extracted again?
 
-- `reports/sequence_dedup_summary.tsv`: fields:
+No. autotax2 assumes that `prepare-dataset --fasta` already points to target
+SSU/16S sequences.
 
-```text
-sequence_md5, unique_seq_id, representative_internal_seq_id,
-first_seen_dataset, occurrence_count, datasets, exported, taxon_id
-```
+### 11.2 Does autotax2 run barrnap?
 
-### `autotax2 validate`
+No. barrnap or any other extraction workflow may be used before autotax2, but
+autotax2 does not invoke, validate, or record that preprocessing step.
 
-Example:
+### 11.3 Why are SILVA records with empty domains rejected?
+
+The domain rank is the root of the rank-aware backbone. Records with empty or
+unresolved domains cannot be placed safely under Archaea or Bacteria, so they
+are written to `silva_rejected.tsv`.
+
+### 11.4 Can placeholder IDs be reused?
+
+No. Placeholder counters are durable, and deprecated IDs are never reused.
+
+### 11.5 What happens when identical sequences appear in multiple datasets?
+
+Each sequence receives an MD5 digest. Exact duplicate sequences retain
+membership records, but the same sequence MD5 is not exported repeatedly.
+
+## 12. Developer Checks
 
 ```bash
-autotax2 validate --build autotax2_build
-autotax2 validate --build autotax2_build --strict
-autotax2 validate --build autotax2_build --no-check-exports
+python -m pytest
+python -m compileall autotax2
+autotax2 --help
+autotax2 prepare-dataset --help
 ```
-
-Purpose:
-Validate registry invariants, placeholder safety, taxonomy paths, sequence
-mapping, representatives, exports, tool metadata, and SILVA immutability.
-
-Input requirements:
-
-- Build directory.
-- Registry files under `registry/`.
-- Export files are optional. If present and `--check-exports` is enabled, they
-  are validated.
-
-Key parameters:
-
-- `--build PATH`: required build directory.
-- `--strict`: selected reproducibility/export warnings become errors.
-- `--check-exports/--no-check-exports`: default check existing exports.
-- `--report PATH`: default `<build>/reports/validation_report.md`.
-
-Algorithm framework:
-
-1. Check required registry files:
-
-```text
-taxon_nodes.tsv
-sequence_registry.tsv
-dataset_registry.tsv
-name_index.tsv
-placeholder_counters.yaml
-```
-
-2. Check optional registry files when relevant:
-
-```text
-cluster_to_taxon.tsv
-representative_registry.tsv
-```
-
-3. Validate dataset prefixes:
-
-```text
-prefixes are unique
-SILVA is reserved
-dataset prefix is frozen
-```
-
-4. Validate placeholders:
-
-```text
-no duplicate active taxon names at same rank
-no duplicate active placeholder names
-deprecated/superseded placeholders are not reused
-placeholder regex:
-^[cofgs]__[A-Za-z][A-Za-z0-9]*[cofgs][0-9]{6}$
-```
-
-5. Validate parent-child rank order:
-
-```text
-domain -> phylum -> class -> order -> family -> genus -> species
-```
-
-6. Detect missing parents, wrong parent rank, cycles, and active species without
-   complete seven-rank paths.
-7. Validate SILVA named immutability:
-
-```text
-named SILVA taxa remain protected
-named SILVA taxa are not renamed to placeholders
-protected snapshot is created or compared
-```
-
-8. Validate sequence mapping:
-
-```text
-every custom internal_seq_id has original_seq_id
-every sequence has sequence_md5
-duplicate MD5 membership points to a unique sequence
-```
-
-9. Validate representatives:
-
-```text
-representative sequence exists
-active species should have a representative
-strict mode can fail missing representative warnings
-```
-
-10. Validate exports if requested:
-
-```text
-SINTAX: ;tax= exists, d:/p:/.../s: exist, no rank prefixes in values
-QIIME2: Feature ID and Taxon columns exist, taxonomy contains d__
-DADA2 toGenus: header contains taxonomy to genus
-DADA2 assignSpecies: header has seq_id genus species, no semicolons, no g__/s__
-```
-
-11. Validate tool metadata:
-
-```text
-barrnap version recorded if barrnap recutting ran
-SINA version/status recorded if orient-sina ran
-VSEARCH iddef recorded if cluster-search ran
-```
-
-Main outputs:
-
-- `reports/validation_report.md`: Markdown summary with sections:
-
-```text
-Summary
-Errors
-Warnings
-Registry checks
-Placeholder checks
-Taxonomy checks
-Sequence checks
-Export checks
-Tool metadata checks
-```
-
-- `reports/validation_report.tsv`: fields:
-
-```text
-level, check, status, message, path
-```
-
-Exit behavior:
-
-```text
-no errors -> exit 0
-errors -> exit 1
-strict warnings promoted to errors -> exit 1
-```
-
-### `autotax2 add`
-
-Example:
-
-```bash
-autotax2 add D20 --config autotax2.yaml --fasta dataset.fa
-```
-
-Purpose:
-This is currently a placeholder command retained for the future higher-level
-dataset-add workflow. The implemented dataset ingestion command is
-`prepare-dataset`.
-
-Input requirements:
-
-- `dataset_prefix` argument.
-- Optional config path.
-- Optional FASTA path.
-
-Current behavior:
-
-1. Load the config file with PyYAML.
-2. Print a placeholder message.
-3. Do not modify the registry.
-
-Output:
-Console message only.
-
-## Optional Real-Tool Integration Run
-
-Real barrnap/SINA/VSEARCH checks are intentionally optional and require
-user-provided data:
-
-```bash
-bash scripts/run_real_integration_test.sh \
-  --silva-fasta /home/database/silva_138.2/silva_rep/SILVA_138.2_SSURef_NR99_tax_silva.dna.fasta.gz \
-  --dataset-fasta /path/to/example.intron_free.fa \
-  --outdir /tmp/autotax2_real_test \
-  --domain Archaea \
-  --dataset-name digester2020_test \
-  --prefix TST \
-  --threads 8
-```
-
-Pytest integration mode:
-
-```bash
-AUTOTAX2_RUN_INTEGRATION=1 \
-AUTOTAX2_INTEGRATION_SILVA_FASTA=/path/to/SILVA.fa.gz \
-AUTOTAX2_INTEGRATION_DATASET_FASTA=/path/to/dataset.fa \
-python -m pytest tests/integration -m integration
-```
-
-Normal `python -m pytest` skips these integration tests.
-
-## Example Config
-
-See [examples/autotax2.example.yaml](examples/autotax2.example.yaml).
-

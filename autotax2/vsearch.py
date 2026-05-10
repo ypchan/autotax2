@@ -508,47 +508,70 @@ def cluster_search_dataset(
 
 
 def build_current_representatives(build_dir: Path, current_dataset: str | None = None) -> int:
-    """Build a simple current registry representative FASTA and taxonomy TSV."""
+    """Build a current registry representative FASTA and taxonomy TSV.
+
+    The file is rebuilt from durable sources whenever possible so placement does
+    not search a stale representative cache after registry or dataset updates.
+    """
     registry_dir = build_dir / "registry"
     registry_dir.mkdir(parents=True, exist_ok=True)
     reps_fasta = registry_dir / "current_representatives.fa"
     reps_tax = registry_dir / "current_representatives.tax.tsv"
-    if reps_fasta.exists():
-        records = read_fasta(reps_fasta)
-        if not reps_tax.exists():
-            _write_tsv(
-                [{"seq_id": record.seq_id, "taxonomy": "", "source": "existing"} for record in records],
-                reps_tax,
-                ["seq_id", "taxonomy", "source"],
-            )
-        return len(records)
 
     records: list[FastaRecord] = []
     tax_rows: list[dict[str, str]] = []
-    _append_representatives_from_fasta(
-        build_dir / "silva" / "silva_named_backbone.fa",
-        records,
-        tax_rows,
-        source="silva_named_backbone",
-    )
-    _append_representatives_from_fasta(
-        build_dir / "silva" / "silva_unresolved.resolved.fa",
-        records,
-        tax_rows,
-        source="silva_unresolved_resolved",
-    )
-    datasets_dir = build_dir / "datasets"
-    if datasets_dir.exists():
-        for dataset_dir in sorted(path for path in datasets_dir.iterdir() if path.is_dir()):
-            dataset_name = dataset_dir.name.split("_", maxsplit=1)[-1]
-            if current_dataset is not None and dataset_name == current_dataset:
+    representative_rows = _active_representative_rows(registry_dir, current_dataset=current_dataset)
+    if representative_rows:
+        sequences = _sequence_lookup(build_dir)
+        taxon_by_id = _taxon_by_id(registry_dir)
+        for row in representative_rows:
+            seq_id = row.get("representative_seq_id", "")
+            sequence = sequences.get(seq_id, "")
+            if not seq_id or not sequence:
                 continue
-            _append_representatives_from_fasta(
-                dataset_dir / "sina.oriented.fa",
-                records,
-                tax_rows,
-                source=f"dataset:{dataset_name}",
+            taxon_id = row.get("taxon_id", "")
+            taxonomy = _taxonomy_for_taxon(taxon_id, taxon_by_id) if taxon_id else ""
+            records.append(FastaRecord(seq_id=seq_id, header=seq_id, sequence=sequence))
+            tax_rows.append(
+                {
+                    "seq_id": seq_id,
+                    "taxonomy": taxonomy,
+                    "source": row.get("source_category", "") or row.get("source", ""),
+                }
             )
+
+    if not records:
+        _append_representatives_from_fasta(
+            build_dir / "silva" / "silva_named_backbone.fa",
+            records,
+            tax_rows,
+            source="silva_named_backbone",
+        )
+        _append_representatives_from_fasta(
+            build_dir / "silva" / "silva_unresolved.resolved.fa",
+            records,
+            tax_rows,
+            source="silva_unresolved_resolved",
+        )
+        datasets_dir = build_dir / "datasets"
+        if datasets_dir.exists():
+            for dataset_dir in sorted(path for path in datasets_dir.iterdir() if path.is_dir()):
+                dataset_name = dataset_dir.name.split("_", maxsplit=1)[-1]
+                if current_dataset is not None and dataset_name == current_dataset:
+                    continue
+                _append_representatives_from_fasta(
+                    dataset_dir / "sina.oriented.fa",
+                    records,
+                    tax_rows,
+                    source=f"dataset:{dataset_name}",
+                )
+    if not records and reps_fasta.exists():
+        # Hand-built test fixtures and legacy builds may only have this cache.
+        records = read_fasta(reps_fasta)
+        tax_rows = [
+            {"seq_id": record.seq_id, "taxonomy": "", "source": "existing_cache"}
+            for record in records
+        ]
     write_fasta(records, reps_fasta)
     _write_tsv(tax_rows, reps_tax, ["seq_id", "taxonomy", "source"])
     return len(records)
@@ -575,6 +598,65 @@ def _append_representatives_from_fasta(
         if " " in record.header:
             taxonomy = record.header.split(maxsplit=1)[1]
         tax_rows.append({"seq_id": record.seq_id, "taxonomy": taxonomy, "source": source})
+
+
+def _active_representative_rows(registry_dir: Path, current_dataset: str | None) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row in _read_tsv(registry_dir / "representative_registry.tsv"):
+        if row.get("status", "active") not in {"", "active"}:
+            continue
+        if current_dataset is not None and row.get("dataset") == current_dataset:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _sequence_lookup(build_dir: Path) -> dict[str, str]:
+    paths = [
+        build_dir / "silva" / "silva_named_backbone.fa",
+        build_dir / "silva" / "silva_unresolved.resolved.fa",
+        build_dir / "silva" / "silva_unresolved.fa",
+    ]
+    datasets_dir = build_dir / "datasets"
+    if datasets_dir.exists():
+        for dataset_dir in sorted(path for path in datasets_dir.iterdir() if path.is_dir()):
+            paths.extend(
+                [
+                    dataset_dir / "sina.oriented.fa",
+                    dataset_dir / "prepared.ssu.fa",
+                    dataset_dir / "input.normalized.fa",
+                ]
+            )
+    paths.append(build_dir / "registry" / "current_representatives.fa")
+    sequences: dict[str, str] = {}
+    for path in paths:
+        if not path.exists():
+            continue
+        for record in read_fasta(path):
+            sequences.setdefault(record.seq_id, record.sequence)
+    return sequences
+
+
+def _taxon_by_id(registry_dir: Path) -> dict[str, dict[str, str]]:
+    return {
+        row.get("taxon_id", ""): row
+        for row in _read_tsv(registry_dir / "taxon_nodes.tsv")
+        if row.get("taxon_id")
+    }
+
+
+def _taxonomy_for_taxon(taxon_id: str, taxon_by_id: dict[str, dict[str, str]]) -> str:
+    labels: list[str] = []
+    seen: set[str] = set()
+    current = taxon_id
+    while current and current not in seen:
+        seen.add(current)
+        row = taxon_by_id.get(current, {})
+        if not row:
+            break
+        labels.append(row.get("name", current))
+        current = row.get("parent_taxon_id", "")
+    return ";".join(reversed(labels))
 
 
 def _find_dataset_dir(build_dir: Path, dataset: str) -> Path:

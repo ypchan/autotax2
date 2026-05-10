@@ -2,7 +2,6 @@
 set -euo pipefail
 
 AUTOTAX2_CMD="${AUTOTAX2_CMD:-autotax2}"
-BARRNAP_EXPECTED_VERSION="1.10.5"
 
 SILVA_FASTA=""
 DATASET_FASTA=""
@@ -11,7 +10,6 @@ DOMAIN=""
 DATASET_NAME=""
 PREFIX=""
 THREADS="4"
-STRICT_TOOL_VERSION="0"
 
 usage() {
   cat <<'USAGE'
@@ -19,7 +17,7 @@ Run an optional real-tool autotax2 integration workflow.
 
 Required:
   --silva-fasta PATH
-  --dataset-fasta PATH
+  --dataset-fasta PATH       externally extracted SSU/16S FASTA
   --outdir PATH
   --domain Archaea|Bacteria
   --dataset-name NAME
@@ -27,7 +25,6 @@ Required:
 
 Optional:
   --threads INT              default: 4
-  --strict-tool-version      fail if barrnap is not 1.10.5
 
 Environment:
   AUTOTAX2_CMD               command to run autotax2, default: autotax2
@@ -50,8 +47,6 @@ while [[ $# -gt 0 ]]; do
       PREFIX="${2:-}"; shift 2 ;;
     --threads)
       THREADS="${2:-}"; shift 2 ;;
-    --strict-tool-version)
-      STRICT_TOOL_VERSION="1"; shift ;;
     --help|-h)
       usage; exit 0 ;;
     *)
@@ -87,10 +82,6 @@ require_cmd() {
   fi
 }
 
-first_version() {
-  sed -nE 's/.*([0-9]+(\.[0-9]+)+).*/\1/p' | head -n 1
-}
-
 require_nonempty() {
   local path="$1"
   if [[ ! -s "$path" ]]; then
@@ -109,7 +100,6 @@ require_file "$SILVA_FASTA"
 require_file "$DATASET_FASTA"
 
 require_cmd "$AUTOTAX2_CMD"
-require_cmd barrnap
 require_cmd sina
 require_cmd vsearch
 require_cmd gzip
@@ -121,24 +111,9 @@ if [[ -d "$OUTDIR" ]] && [[ -n "$(find "$OUTDIR" -mindepth 1 -print -quit 2>/dev
 fi
 mkdir -p "$OUTDIR"
 
-echo "[autotax2 integration] Checking external tool versions"
-BARRNAP_VERSION="$(barrnap --version 2>&1 | first_version || true)"
+echo "[autotax2 integration] Checking external tool availability"
 sina --version >/dev/null 2>&1 || true
 vsearch --version >/dev/null 2>&1 || true
-
-if [[ "$BARRNAP_VERSION" != "$BARRNAP_EXPECTED_VERSION" ]]; then
-  message="barrnap version is ${BARRNAP_VERSION:-unknown}; expected $BARRNAP_EXPECTED_VERSION"
-  if [[ "$STRICT_TOOL_VERSION" == "1" ]]; then
-    echo "ERROR: $message" >&2
-    exit 1
-  fi
-  echo "WARNING: $message" >&2
-fi
-
-PREPARE_STRICT_ARGS=()
-if [[ "$STRICT_TOOL_VERSION" == "1" || "$BARRNAP_VERSION" == "$BARRNAP_EXPECTED_VERSION" ]]; then
-  PREPARE_STRICT_ARGS+=(--strict-tool-version)
-fi
 
 echo "[autotax2 integration] init"
 "$AUTOTAX2_CMD" init \
@@ -157,9 +132,7 @@ echo "[autotax2 integration] prepare-dataset"
   --name "$DATASET_NAME" \
   --prefix "$PREFIX" \
   --fasta "$DATASET_FASTA" \
-  --domain "$DOMAIN" \
-  --threads "$THREADS" \
-  "${PREPARE_STRICT_ARGS[@]}"
+  --domain "$DOMAIN"
 
 echo "[autotax2 integration] orient-sina"
 "$AUTOTAX2_CMD" orient-sina \
@@ -199,6 +172,7 @@ QIIME2_TAX="$OUTDIR/export/qiime2/reference_taxonomy.tsv"
 GLOBAL_SUMMARY="$OUTDIR/reports/global_summary.tsv"
 DATASET_DELTA="$OUTDIR/reports/dataset_delta_summary.tsv"
 VALIDATION_MD="$OUTDIR/reports/validation_report.md"
+EXPORT_VALIDATION="$OUTDIR/export/export_validation.tsv"
 
 echo "[autotax2 integration] post-run file checks"
 for path in \
@@ -209,7 +183,8 @@ for path in \
   "$QIIME2_TAX" \
   "$GLOBAL_SUMMARY" \
   "$DATASET_DELTA" \
-  "$VALIDATION_MD"; do
+  "$VALIDATION_MD" \
+  "$EXPORT_VALIDATION"; do
   require_nonempty "$path"
 done
 

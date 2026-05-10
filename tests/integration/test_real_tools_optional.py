@@ -50,9 +50,6 @@ def test_real_tools_optional_integration(tmp_path: Path) -> None:
         "--threads",
         os.environ.get("AUTOTAX2_INTEGRATION_THREADS", "4"),
     ]
-    if os.environ.get("AUTOTAX2_INTEGRATION_STRICT_TOOL_VERSION") == "1":
-        command.append("--strict-tool-version")
-
     completed = subprocess.run(
         command,
         check=False,
@@ -75,6 +72,7 @@ def test_real_tools_optional_integration(tmp_path: Path) -> None:
         outdir / "reports" / "global_summary.tsv",
         outdir / "reports" / "dataset_delta_summary.tsv",
         outdir / "reports" / "validation_report.md",
+        outdir / "export" / "export_validation.tsv",
     ]
     for path in expected_outputs:
         assert path.exists() and path.stat().st_size > 0, path

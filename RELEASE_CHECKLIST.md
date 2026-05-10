@@ -23,13 +23,15 @@
 - [ ] AGENTS.md is current.
 - [ ] pyproject.toml version is updated or intentionally unchanged.
 - [ ] External tools are documented:
-  - [ ] barrnap 1.10.5
   - [ ] SINA
   - [ ] VSEARCH
+- [ ] Dataset FASTA input contract is documented as externally extracted SSU/16S.
 - [ ] Export files checked:
   - [ ] SINTAX format checked.
   - [ ] QIIME2 taxonomy format checked.
   - [ ] DADA2 assignSpecies format checked.
+  - [ ] `export/export_validation.tsv` has no errors.
+- [ ] Dated audit logs are written under `logs/`.
 - [ ] No duplicate placeholders.
 - [ ] Deprecated placeholders are not reused.
 - [ ] Named SILVA backbone was not mutated.

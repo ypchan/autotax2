@@ -80,7 +80,7 @@ def summarize_build(
                 "add_order",
                 "input_sequences",
                 "normalized_sequences",
-                "barrnap_extracted",
+                "prepared_sequences",
                 "oriented_sequences",
                 "unique_md5_sequences",
                 "duplicate_sequences",
@@ -244,7 +244,7 @@ def _dataset_delta_rows(build_dir: Path, dataset_rows: list[dict[str, str]]) -> 
                 "add_order": dataset_row.get("add_order", ""),
                 "input_sequences": prepare.get("input_sequences", str(len(_read_tsv(dataset_dir / "sequence_id_map.tsv")))),
                 "normalized_sequences": prepare.get("normalized_sequences", str(len(members))),
-                "barrnap_extracted": prepare.get("barrnap_extracted", _count_fasta_records(dataset_dir / "barrnap.extracted.fa")),
+                "prepared_sequences": prepare.get("final_prepared_sequences", _count_fasta_records(dataset_dir / "prepared.ssu.fa")),
                 "oriented_sequences": _count_fasta_records(dataset_dir / "sina.oriented.fa"),
                 "unique_md5_sequences": str(len({row.get("sequence_md5", "") for row in members if row.get("sequence_md5")})),
                 "duplicate_sequences": str(sum(1 for row in members if _is_true(row.get("is_duplicate_sequence", "false")))),
@@ -623,7 +623,7 @@ def _fasta_paths(build_dir: Path) -> list[Path]:
             paths.extend(
                 [
                     dataset_dir / "sina.oriented.fa",
-                    dataset_dir / "barrnap.extracted.fa",
+                    dataset_dir / "prepared.ssu.fa",
                     dataset_dir / "input.normalized.fa",
                 ]
             )

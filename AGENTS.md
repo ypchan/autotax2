@@ -22,7 +22,8 @@ incremental additions from downstream datasets.
 6. Input sequence IDs are remapped to internal IDs like `D20_000001`.
 7. Sequence MD5 is stored; exact duplicate sequences are not exported repeatedly.
 8. VSEARCH identity uses fixed `--iddef 2` by default.
-9. barrnap recutting is required.
+9. Dataset FASTA inputs are already externally extracted SSU/16S sequences;
+   autotax2 does not run sequence extraction internally.
 10. SINA orientation should use loose settings.
 11. Placement uses near-best hit consensus, not best hit only.
 12. Exports must include:
@@ -33,6 +34,7 @@ incremental additions from downstream datasets.
 13. Summary and validation reports must preserve named SILVA immutability,
     duplicate-sequence accounting, placeholder uniqueness, and export format
     compatibility.
+14. Major CLI runs should leave dated audit logs under `logs/`.
 
 ## Engineering Notes
 

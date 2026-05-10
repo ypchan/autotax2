@@ -86,6 +86,10 @@ def test_resolve_silva_rerun_reuses_existing_cluster_taxa(resolve_tmp_dir: Path)
     }
     assert counters["genus"] == "2"
     assert counters["species"] == "3"
+    yaml_text = (build / "registry" / "placeholder_counters.yaml").read_text(encoding="utf-8")
+    assert "SILVA:" in yaml_text
+    assert "genus: 2" in yaml_text
+    assert "species: 3" in yaml_text
 
 
 def test_resolve_silva_does_not_reuse_deprecated_placeholder(resolve_tmp_dir: Path) -> None:
@@ -123,7 +127,17 @@ def test_resolve_silva_dry_run_does_not_update_counters(resolve_tmp_dir: Path) -
     assert result.exit_code == 0, result.output
     assert counters_path.read_text(encoding="utf-8") == before
     assert (build / "silva" / "silva_unresolved_taxa.dry_run.tsv").exists()
-    assert not (build / "registry" / "cluster_to_taxon.tsv").exists()
+    assert _read_tsv(build / "registry" / "cluster_to_taxon.tsv") == []
+
+
+def test_resolve_silva_rejects_unimplemented_rank_threshold_overrides(resolve_tmp_dir: Path) -> None:
+    build = _init_resolve_fixture(resolve_tmp_dir)
+    _write_cluster_uc(build)
+
+    result = runner.invoke(app, ["resolve-silva", "--build", str(build), "--family-id", "0.900"])
+
+    assert result.exit_code != 0
+    assert "currently clusters unresolved SILVA records at genus and species" in str(result.exception)
 
 
 def test_resolve_silva_with_no_unresolved_records_exits_cleanly(resolve_tmp_dir: Path) -> None:

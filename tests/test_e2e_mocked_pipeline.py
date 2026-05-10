@@ -101,7 +101,7 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert id_rows[-2]["internal_seq_id"] != id_rows[-1]["internal_seq_id"]
     assert all(row["sequence_md5"] for row in membership_rows)
     assert len(unique_rows) == len({row["sequence_md5"] for row in membership_rows})
-    assert read_fasta(dataset_dir / "barrnap.extracted.fa")
+    assert read_fasta(dataset_dir / "prepared.ssu.fa")
 
     result = runner.invoke(app, ["orient-sina", "--build", str(build), "--dataset", "digester2020"])
     assert result.exit_code == 0, result.output
@@ -131,7 +131,9 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert "g__D20g000001" in created_names
     assert len(created_names) == len(set(created_names))
     representative_rows = _read_tsv(build / "registry" / "representative_registry.tsv")
-    assert not any(row.get("representative_seq_id") == "ARCH_NAMED" for row in representative_rows)
+    named_rep = next(row for row in representative_rows if row.get("representative_seq_id") == "ARCH_NAMED")
+    assert named_rep["source_category"] == "named_silva"
+    assert named_rep["representative_reason"] == "type_strain"
 
     result = runner.invoke(app, ["export", "all", "--build", str(build)])
     assert result.exit_code == 0, result.output
@@ -140,8 +142,10 @@ def test_tiny_mocked_end_to_end_pipeline(
     qiime_tax = build / "export" / "qiime2" / "reference_taxonomy.tsv"
     dada_genus = build / "export" / "dada2" / "autotax2_toGenus_trainset.fa.gz"
     dada_species = build / "export" / "dada2" / "autotax2_assignSpecies.fa.gz"
+    export_validation = build / "export" / "export_validation.tsv"
     for path in (sintax_path, qiime_fasta, qiime_tax, dada_genus, dada_species):
         assert path.exists()
+    assert export_validation.exists()
     sintax_headers = _gzip_headers(sintax_path)
     assert all(";tax=d:" in header and ",g:" in header and ",s:" in header for header in sintax_headers)
     assert all("g__" not in header and "s__" not in header for header in sintax_headers)
@@ -159,7 +163,7 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert (report_dir / "dataset_overlap_matrix.tsv").exists()
     delta = _read_tsv(report_dir / "dataset_delta_summary.tsv")[0]
     global_summary = _read_tsv(report_dir / "global_summary.tsv")[0]
-    assert delta["assigned_named_silva"] == "1"
+    assert delta["assigned_named_silva"] == "2"
     assert delta["assigned_unresolved_silva"] == "1"
     assert int(global_summary["duplicate_sequences"]) >= 1
 
@@ -192,15 +196,10 @@ def _mock_external_tools(monkeypatch: pytest.MonkeyPatch) -> None:
         command = [str(part) for part in command]
         executable = Path(command[0]).name.lower()
         if command[-1] == "--version":
-            if "barrnap" in executable:
-                return subprocess.CompletedProcess(command, 0, stdout="barrnap 1.10.5\n", stderr="")
             if "sina" in executable:
                 return subprocess.CompletedProcess(command, 0, stdout="SINA 1.7.2\n", stderr="")
             if "vsearch" in executable:
                 return subprocess.CompletedProcess(command, 0, stdout="vsearch v2.29.3\n", stderr="")
-        if "barrnap" in executable:
-            kwargs["stdout"].write((FIXTURES / "fake_barrnap.gff3").read_text(encoding="utf-8"))
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="barrnap mock\n")
         if "sina" in executable:
             output_path = Path(command[command.index("-o") + 1])
             shutil.copyfile(FIXTURES / "fake_sina_output.fa", output_path)

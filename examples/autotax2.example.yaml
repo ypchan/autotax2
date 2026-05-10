@@ -9,7 +9,7 @@ silva:
 defaults:
   vsearch_iddef: 2
   sina_orientation: loose
-  require_barrnap_recut: true
+  dataset_input_contract: externally_processed_ssu
   near_best_delta: 0.01
 
 exports:

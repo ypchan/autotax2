@@ -326,8 +326,8 @@ def _make_report_build(tmp_dir: Path) -> Path:
     )
     _write_tsv(
         dataset / "prepare_summary.tsv",
-        [{"dataset": "digester2020", "prefix": "D20", "input_sequences": "3", "normalized_sequences": "3", "barrnap_extracted": "3"}],
-        ["dataset", "prefix", "input_sequences", "normalized_sequences", "barrnap_extracted"],
+        [{"dataset": "digester2020", "prefix": "D20", "input_sequences": "3", "normalized_sequences": "3", "final_prepared_sequences": "3"}],
+        ["dataset", "prefix", "input_sequences", "normalized_sequences", "final_prepared_sequences"],
     )
     _write_tsv(
         dataset / "sequence_id_map.tsv",

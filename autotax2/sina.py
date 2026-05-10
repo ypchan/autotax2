@@ -103,11 +103,16 @@ def orient_dataset_with_sina(
     min_sina_score: float = 0.0,
 ) -> SinaRunSummary:
     """Orient a prepared dataset with SINA, falling back conservatively by default."""
-    del min_sina_identity, min_sina_score
+    if min_sina_identity > 0.0 or min_sina_score > 0.0:
+        raise NotImplementedError(
+            "SINA identity/score threshold filtering is not implemented because "
+            "the current parser does not read those metrics from SINA output. "
+            "Leave --min-sina-identity and --min-sina-score at 0.0."
+        )
 
     build_dir = Path(build)
     dataset_dir = _find_dataset_dir(build_dir, dataset)
-    input_fasta = dataset_dir / "barrnap.extracted.fa"
+    input_fasta = dataset_dir / "prepared.ssu.fa"
     output_fasta = dataset_dir / "sina.oriented.fa"
     summary_path = dataset_dir / "sina.summary.tsv"
     log_path = dataset_dir / "sina.log"

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, TextIO
+
+import yaml
 
 from autotax2.placeholders import (
     PlaceholderAllocator,
@@ -41,6 +44,13 @@ PLACEHOLDER_RANK_BY_NAME = {
     "species": PlaceholderRank.SPECIES,
 }
 MIXED_PARENT_WARNING = "mixed_silva_parent_unresolved_cluster"
+SILVA_REJECTED_FIELDS = ["seq_id", "original_taxonomy", "reject_reason"]
+DEFAULT_SPECIES_ID = 0.987
+DEFAULT_GENUS_ID = 0.945
+DEFAULT_FAMILY_ID = 0.865
+DEFAULT_ORDER_ID = 0.820
+DEFAULT_CLASS_ID = 0.785
+DEFAULT_FLOOR_ID = 0.750
 UNRESOLVED_TOKENS = (
     "unidentified",
     "unclassified",
@@ -171,7 +181,7 @@ def parse_silva_header(header: str) -> tuple[str, SilvaTaxonomy]:
     parts = normalized_header.split(maxsplit=1)
     seq_id = parts[0]
     original_taxonomy = parts[1].strip() if len(parts) > 1 else ""
-    taxonomy_parts = [part.strip() for part in original_taxonomy.split(";") if part.strip()]
+    taxonomy_parts = [part.strip() for part in original_taxonomy.split(";")]
     padded_parts = list(taxonomy_parts[: len(SILVA_RANKS)])
     for rank in SILVA_RANKS[len(padded_parts) :]:
         padded_parts.append(f"{MISSING_VALUE_PREFIX}{rank}")
@@ -219,8 +229,17 @@ def classify_unresolved(taxonomy: SilvaTaxonomy) -> UnresolvedClassification:
 
 def read_silva_records(path: str | Path, domain: str | None = None) -> list[SilvaRecord]:
     """Read SILVA FASTA records, optionally filtering by taxonomy domain."""
+    records, _ = _read_silva_records_with_rejections(path, domain=domain)
+    return records
+
+
+def _read_silva_records_with_rejections(
+    path: str | Path,
+    domain: str | None = None,
+) -> tuple[list[SilvaRecord], list[dict[str, str]]]:
     requested_domain = domain.strip() if domain is not None else None
     records: list[SilvaRecord] = []
+    rejected_rows: list[dict[str, str]] = []
 
     for fasta_record in read_fasta(path):
         seq_id, taxonomy = parse_silva_header(fasta_record.header)
@@ -229,6 +248,16 @@ def read_silva_records(path: str | Path, domain: str | None = None) -> list[Silv
                 f"Header parser ID mismatch for {fasta_record.header!r}: "
                 f"{seq_id!r} != {fasta_record.seq_id!r}"
             )
+        reject_reason = _domain_reject_reason(taxonomy.domain)
+        if reject_reason:
+            rejected_rows.append(
+                {
+                    "seq_id": seq_id,
+                    "original_taxonomy": taxonomy.original_taxonomy,
+                    "reject_reason": reject_reason,
+                }
+            )
+            continue
         if requested_domain is not None and taxonomy.domain != requested_domain:
             continue
         records.append(
@@ -239,7 +268,7 @@ def read_silva_records(path: str | Path, domain: str | None = None) -> list[Silv
             )
         )
 
-    return records
+    return records, rejected_rows
 
 
 def initialize_silva_build(
@@ -256,10 +285,12 @@ def initialize_silva_build(
     for directory in (registry_dir, silva_dir, logs_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    records = read_silva_records(silva_fasta, domain=domain)
+    records, rejected_rows = _read_silva_records_with_rejections(silva_fasta, domain=domain)
     named_records = [record for record in records if not record.is_unresolved]
     unresolved_records = [record for record in records if record.is_unresolved]
     metadata = read_type_strain_metadata(type_strain_metadata) if type_strain_metadata else {}
+    taxon_rows = _taxon_node_rows(named_records)
+    species_taxon_by_taxonomy = _species_taxon_id_by_taxonomy(taxon_rows)
 
     write_fasta(
         [record.fasta_record for record in named_records],
@@ -286,7 +317,11 @@ def initialize_silva_build(
             "unresolved_reason",
         ],
     )
-    taxon_rows = _taxon_node_rows(named_records)
+    _write_tsv(
+        rejected_rows,
+        silva_dir / "silva_rejected.tsv",
+        SILVA_REJECTED_FIELDS,
+    )
     _write_tsv(
         taxon_rows,
         registry_dir / "taxon_nodes.tsv",
@@ -302,10 +337,11 @@ def initialize_silva_build(
         ],
     )
     _write_tsv(
-        _sequence_registry_rows(records, metadata),
+        _sequence_registry_rows(records, metadata, species_taxon_by_taxonomy),
         registry_dir / "sequence_registry.tsv",
         [
             "seq_id",
+            "taxon_id",
             "source",
             "sequence_md5",
             "sequence_length",
@@ -338,35 +374,63 @@ def initialize_silva_build(
         registry_dir / "name_index.tsv",
         ["name", "rank", "taxon_id", "protected", "source"],
     )
-    (logs_dir / "init.log").write_text(
-        (
-            f"silva_fasta={Path(silva_fasta)}\n"
-            f"domain={domain or ''}\n"
-            f"records={len(records)}\n"
-            f"named={len(named_records)}\n"
-            f"unresolved={len(unresolved_records)}\n"
-        ),
-        encoding="utf-8",
+    _write_tsv(
+        [],
+        registry_dir / "cluster_to_taxon.tsv",
+        ["cluster_key", "taxon_id", "rank", "name", "status", "source_prefix"],
     )
-
+    _write_tsv(
+        _representative_registry_rows(named_records, metadata, species_taxon_by_taxonomy),
+        registry_dir / "representative_registry.tsv",
+        [
+            "representative_seq_id",
+            "taxon_id",
+            "dataset",
+            "source_category",
+            "status",
+            "protected",
+            "source",
+            "is_type_strain",
+            "representative_reason",
+        ],
+    )
+    _write_placeholder_counters(registry_dir, {SILVA_PLACEHOLDER_PREFIX: {rank: 1 for rank in PLACEHOLDER_RANKS}})
+    _write_tsv(
+        [
+            {
+                "taxon_id": row["taxon_id"],
+                "rank": row["rank"],
+                "name": row["name"],
+                "parent_taxon_id": row["parent_taxon_id"],
+            }
+            for row in taxon_rows
+        ],
+        registry_dir / "protected_taxa_snapshot.tsv",
+        ["taxon_id", "rank", "name", "parent_taxon_id"],
+    )
     return {
         "records": len(records),
+        "rejected": len(rejected_rows),
         "named": len(named_records),
         "unresolved": len(unresolved_records),
     }
 
 
 def read_type_strain_metadata(path: str | Path) -> dict[str, TypeStrainMetadata]:
-    """Read optional type-strain metadata keyed by SILVA sequence ID."""
+    """Read optional type-strain metadata keyed by SILVA sequence ID.
+
+    Two inputs are supported:
+    1. autotax2 TSV with seq_id/is_type_strain/species_name/strain_id/source/evidence.
+    2. SILVA full_metadata TSV/TSV.gz, parsed flexibly for accession and type-material fields.
+    """
     metadata: dict[str, TypeStrainMetadata] = {}
-    with Path(path).open("r", encoding="utf-8", newline="") as handle:
+    with _open_metadata_text(path) as handle:
         reader = csv.DictReader(handle, delimiter=chr(9))
         required = {"seq_id", "is_type_strain", "species_name", "strain_id", "source", "evidence"}
-        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
-            raise ValueError(
-                "Type strain metadata must contain fields: "
-                "seq_id, is_type_strain, species_name, strain_id, source, evidence"
-            )
+        if reader.fieldnames is None:
+            raise ValueError("Type strain metadata must have a header row.")
+        if not required.issubset(reader.fieldnames):
+            return _read_silva_full_metadata(reader)
         for row in reader:
             seq_id = (row.get("seq_id") or "").strip()
             if not seq_id:
@@ -380,6 +444,138 @@ def read_type_strain_metadata(path: str | Path) -> dict[str, TypeStrainMetadata]
                 evidence=(row.get("evidence") or "").strip(),
             )
     return metadata
+
+
+def _read_silva_full_metadata(reader: csv.DictReader) -> dict[str, TypeStrainMetadata]:
+    field_map = _metadata_field_map(reader.fieldnames or [])
+    metadata: dict[str, TypeStrainMetadata] = {}
+    for row in reader:
+        seq_id = _metadata_value(
+            row,
+            field_map,
+            "seqid",
+            "sequenceid",
+            "primaryaccession",
+            "accession",
+            "accessionnumber",
+            "acc",
+            "id",
+        )
+        if not seq_id:
+            continue
+        type_field, type_value = _type_material_evidence(row)
+        if not _is_type_strain_value(type_value):
+            continue
+        metadata[seq_id] = TypeStrainMetadata(
+            seq_id=seq_id,
+            is_type_strain="true",
+            species_name=_metadata_species_name(row, field_map),
+            strain_id=_metadata_value(
+                row,
+                field_map,
+                "strainid",
+                "strain",
+                "isolate",
+                "culturescollection",
+                "culturecollection",
+            ),
+            source="SILVA full_metadata",
+            evidence=f"{type_field}={type_value}" if type_field else type_value,
+        )
+    return metadata
+
+
+def _metadata_field_map(fieldnames: Iterable[str]) -> dict[str, str]:
+    return {_normalize_metadata_field(field): field for field in fieldnames}
+
+
+def _normalize_metadata_field(field: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", field.lower())
+
+
+def _metadata_value(
+    row: dict[str, str],
+    field_map: dict[str, str],
+    *candidates: str,
+) -> str:
+    for candidate in candidates:
+        field = field_map.get(candidate)
+        if field:
+            value = (row.get(field) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _metadata_species_name(row: dict[str, str], field_map: dict[str, str]) -> str:
+    direct = _metadata_value(
+        row,
+        field_map,
+        "speciesname",
+        "organismname",
+        "organism",
+        "species",
+        "taxspecies",
+    )
+    if direct:
+        return direct
+    for field, value in row.items():
+        normalized = _normalize_metadata_field(field)
+        if "tax" not in normalized:
+            continue
+        parts = [part.strip() for part in (value or "").split(";") if part.strip()]
+        if parts:
+            return parts[-1]
+    return ""
+
+
+def _type_material_evidence(row: dict[str, str]) -> tuple[str, str]:
+    preferred_fields = (
+        "is_type_strain",
+        "type_strain",
+        "type_material",
+        "typematerial",
+        "type",
+    )
+    normalized_lookup = {_normalize_metadata_field(field): field for field in row}
+    for preferred in preferred_fields:
+        field = normalized_lookup.get(_normalize_metadata_field(preferred))
+        if field:
+            value = (row.get(field) or "").strip()
+            if value:
+                return field, value
+    for field, value in row.items():
+        if "type" not in _normalize_metadata_field(field):
+            continue
+        clean_value = (value or "").strip()
+        if clean_value:
+            return field, clean_value
+    return "", ""
+
+
+def _is_type_strain_value(value: str) -> bool:
+    normalized = value.strip().lower()
+    if not normalized:
+        return False
+    if normalized in {"false", "0", "no", "n", "none", "na", "n/a"}:
+        return False
+    if "non-type" in normalized or "not type" in normalized or "not a type" in normalized:
+        return False
+    if normalized in {"true", "1", "yes", "y", "t"}:
+        return True
+    compact = re.sub(r"[^a-z0-9]+", "", normalized)
+    return (
+        "typestrain" in compact
+        or "typematerial" in compact
+        or "typespecies" in compact
+    )
+
+
+def _open_metadata_text(path: str | Path) -> TextIO:
+    metadata_path = Path(path)
+    if metadata_path.suffix == ".gz":
+        return gzip.open(metadata_path, "rt", encoding="utf-8", newline="")
+    return metadata_path.open("r", encoding="utf-8", newline="")
 
 
 def resolve_silva_unresolved_build(
@@ -396,7 +592,12 @@ def resolve_silva_unresolved_build(
     dry_run: bool = False,
 ) -> ResolveSilvaSummary:
     """Resolve SILVA unresolved records into mutable placeholder taxa."""
-    del family_id, order_id, class_id, floor_id
+    _validate_resolve_threshold_scope(
+        family_id=family_id,
+        order_id=order_id,
+        class_id=class_id,
+        floor_id=floor_id,
+    )
 
     build_dir = Path(build)
     silva_dir = build_dir / "silva"
@@ -827,7 +1028,6 @@ def _update_resolve_registry(
     taxon_nodes_path = registry_dir / "taxon_nodes.tsv"
     name_index_path = registry_dir / "name_index.tsv"
     cluster_to_taxon_path = registry_dir / "cluster_to_taxon.tsv"
-    counters_path = registry_dir / "placeholder_counters.tsv"
 
     existing_taxon_rows = _read_tsv(taxon_nodes_path)
     parent_lookup = _parent_taxon_lookup(existing_taxon_rows, taxa_rows)
@@ -904,18 +1104,81 @@ def _update_resolve_registry(
         }
     _write_tsv(list(cluster_rows_by_key.values()), cluster_to_taxon_path, cluster_fieldnames)
 
+    existing_counters = _read_placeholder_counters(registry_dir)
+    silva_counters = existing_counters.setdefault(SILVA_PLACEHOLDER_PREFIX, {})
+    for rank in PLACEHOLDER_RANKS:
+        silva_counters[rank] = allocator.next_ordinal(
+            PLACEHOLDER_RANK_BY_NAME[rank],
+            SILVA_PLACEHOLDER_PREFIX,
+        )
+    _write_placeholder_counters(registry_dir, existing_counters)
+
+
+def _validate_resolve_threshold_scope(
+    family_id: float,
+    order_id: float,
+    class_id: float,
+    floor_id: float,
+) -> None:
+    """Fail loudly for resolver threshold controls that are not implemented yet."""
+    unsupported = {
+        "family_id": (family_id, DEFAULT_FAMILY_ID),
+        "order_id": (order_id, DEFAULT_ORDER_ID),
+        "class_id": (class_id, DEFAULT_CLASS_ID),
+        "floor_id": (floor_id, DEFAULT_FLOOR_ID),
+    }
+    changed = [
+        f"{name}={value}"
+        for name, (value, default) in unsupported.items()
+        if value != default
+    ]
+    if changed:
+        raise NotImplementedError(
+            "resolve-silva currently clusters unresolved SILVA records at genus "
+            f"and species thresholds only; unsupported threshold overrides: {', '.join(changed)}."
+        )
+
+
+def _read_placeholder_counters(registry_dir: Path) -> dict[str, dict[str, int]]:
+    counters: dict[str, dict[str, int]] = {}
+    yaml_path = registry_dir / "placeholder_counters.yaml"
+    if yaml_path.exists():
+        loaded = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        if isinstance(loaded, dict):
+            for prefix, rank_values in loaded.items():
+                if not isinstance(rank_values, dict):
+                    continue
+                counters[str(prefix)] = {
+                    str(rank): int(value)
+                    for rank, value in rank_values.items()
+                    if str(value).isdigit() or isinstance(value, int)
+                }
+
+    for row in _read_tsv(registry_dir / "placeholder_counters.tsv"):
+        prefix = row.get("source_prefix", "")
+        rank = row.get("rank", "")
+        next_ordinal = row.get("next_ordinal", "")
+        if not prefix or rank not in PLACEHOLDER_RANK_BY_NAME or not next_ordinal.isdigit():
+            continue
+        counters.setdefault(prefix, {})[rank] = int(next_ordinal)
+    return counters
+
+
+def _write_placeholder_counters(registry_dir: Path, counters: dict[str, dict[str, int]]) -> None:
+    yaml_path = registry_dir / "placeholder_counters.yaml"
+    yaml_path.write_text(yaml.safe_dump(counters, sort_keys=True), encoding="utf-8")
+    rows = [
+        {
+            "source_prefix": source_prefix,
+            "rank": rank,
+            "next_ordinal": str(next_ordinal),
+        }
+        for source_prefix in sorted(counters)
+        for rank, next_ordinal in sorted(counters[source_prefix].items())
+    ]
     _write_tsv(
-        [
-            {
-                "source_prefix": SILVA_PLACEHOLDER_PREFIX,
-                "rank": rank,
-                "next_ordinal": str(
-                    allocator.next_ordinal(PLACEHOLDER_RANK_BY_NAME[rank], SILVA_PLACEHOLDER_PREFIX)
-                ),
-            }
-            for rank in PLACEHOLDER_RANKS
-        ],
-        counters_path,
+        rows,
+        registry_dir / "placeholder_counters.tsv",
         ["source_prefix", "rank", "next_ordinal"],
     )
 
@@ -998,6 +1261,14 @@ def _load_placeholder_state(registry_dir: Path) -> dict[str, Any]:
 
 def _row_taxonomy_values(row: dict[str, str]) -> tuple[str, str, str, str, str, str, str]:
     return tuple(row.get(rank, "") for rank in SILVA_RANKS)  # type: ignore[return-value]
+
+
+def _domain_reject_reason(domain: str) -> str:
+    if not domain.strip() or domain.startswith(MISSING_VALUE_PREFIX):
+        return "empty_domain"
+    if _unresolved_reason("domain", domain):
+        return "unresolved_domain"
+    return ""
 
 
 def _split_unresolved_ranks(value: str) -> tuple[str, ...]:
@@ -1107,17 +1378,79 @@ def _taxon_node_rows(records: Iterable[SilvaRecord]) -> list[dict[str, str]]:
     return list(rows_by_key.values())
 
 
+def _species_taxon_id_by_taxonomy(taxon_rows: Iterable[dict[str, str]]) -> dict[str, str]:
+    return {
+        row.get("taxonomy_path", ""): row.get("taxon_id", "")
+        for row in taxon_rows
+        if row.get("rank") == "species" and row.get("taxonomy_path") and row.get("taxon_id")
+    }
+
+
+def _representative_registry_rows(
+    named_records: Iterable[SilvaRecord],
+    metadata: dict[str, TypeStrainMetadata],
+    species_taxon_by_taxonomy: dict[str, str],
+) -> list[dict[str, str]]:
+    chosen_by_taxon: dict[str, tuple[int, SilvaRecord]] = {}
+    for record in named_records:
+        taxon_id = species_taxon_by_taxonomy.get(record.taxonomy.taxonomy_7rank, "")
+        if not taxon_id:
+            continue
+        current = chosen_by_taxon.get(taxon_id)
+        candidate_score = 1 if _is_type_strain_metadata(_metadata_for_seq_id(record.seq_id, metadata)) else 0
+        if current is None or candidate_score > current[0]:
+            chosen_by_taxon[taxon_id] = (candidate_score, record)
+
+    rows: list[dict[str, str]] = []
+    for taxon_id in sorted(chosen_by_taxon):
+        is_type, record = chosen_by_taxon[taxon_id]
+        rows.append(
+            {
+                "representative_seq_id": record.seq_id,
+                "taxon_id": taxon_id,
+                "dataset": SILVA_SOURCE,
+                "source_category": "named_silva",
+                "status": "active",
+                "protected": "true",
+                "source": SILVA_SOURCE,
+                "is_type_strain": _bool_text(bool(is_type)),
+                "representative_reason": "type_strain" if is_type else "first_silva_named_for_species",
+            }
+        )
+    return rows
+
+
+def _is_type_strain_metadata(metadata: TypeStrainMetadata | None) -> bool:
+    return metadata is not None and metadata.is_type_strain.strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _metadata_for_seq_id(
+    seq_id: str,
+    metadata: dict[str, TypeStrainMetadata],
+) -> TypeStrainMetadata | None:
+    exact = metadata.get(seq_id)
+    if exact is not None:
+        return exact
+    accession = seq_id.split(".", maxsplit=1)[0]
+    if accession != seq_id:
+        return metadata.get(accession)
+    return None
+
+
 def _sequence_registry_rows(
     records: Iterable[SilvaRecord],
     metadata: dict[str, TypeStrainMetadata],
+    species_taxon_by_taxonomy: dict[str, str],
 ) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for record in records:
-        type_metadata = metadata.get(record.seq_id)
+        type_metadata = _metadata_for_seq_id(record.seq_id, metadata)
         is_named = not record.is_unresolved
+        taxon_id = species_taxon_by_taxonomy.get(record.taxonomy.taxonomy_7rank, "") if is_named else ""
         rows.append(
             {
                 "seq_id": record.seq_id,
+                "taxon_id": taxon_id,
                 "source": SILVA_SOURCE,
                 "sequence_md5": sequence_md5(record.fasta_record.sequence),
                 "sequence_length": str(len(record.fasta_record.sequence)),
