@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 set -euo pipefail
 
 AUTOTAX2_CMD="${AUTOTAX2_CMD:-autotax2}"
@@ -121,27 +121,27 @@ echo "[autotax2 integration] init"
   --outdir "$OUTDIR" \
   --domain "$DOMAIN"
 
-echo "[autotax2 integration] resolve-silva"
-"$AUTOTAX2_CMD" resolve-silva \
+echo "[autotax2 integration] resolve"
+"$AUTOTAX2_CMD" resolve \
   --build "$OUTDIR" \
   --threads "$THREADS"
 
-echo "[autotax2 integration] prepare-dataset"
-"$AUTOTAX2_CMD" prepare-dataset \
+echo "[autotax2 integration] prepare"
+"$AUTOTAX2_CMD" prepare \
   --build "$OUTDIR" \
   --name "$DATASET_NAME" \
   --prefix "$PREFIX" \
   --fasta "$DATASET_FASTA" \
   --domain "$DOMAIN"
 
-echo "[autotax2 integration] orient-sina"
-"$AUTOTAX2_CMD" orient-sina \
+echo "[autotax2 integration] orient"
+"$AUTOTAX2_CMD" orient \
   --build "$OUTDIR" \
   --dataset "$DATASET_NAME" \
   --threads "$THREADS"
 
-echo "[autotax2 integration] cluster-search"
-"$AUTOTAX2_CMD" cluster-search \
+echo "[autotax2 integration] cluster"
+"$AUTOTAX2_CMD" cluster \
   --build "$OUTDIR" \
   --dataset "$DATASET_NAME" \
   --threads "$THREADS"

@@ -227,17 +227,15 @@ def classify_unresolved(taxonomy: SilvaTaxonomy) -> UnresolvedClassification:
     )
 
 
-def read_silva_records(path: str | Path, domain: str | None = None) -> list[SilvaRecord]:
-    """Read SILVA FASTA records, optionally filtering by taxonomy domain."""
-    records, _ = _read_silva_records_with_rejections(path, domain=domain)
+def read_silva_records(path: str | Path) -> list[SilvaRecord]:
+    """Read all valid-domain SILVA FASTA records."""
+    records, _ = _read_silva_records_with_rejections(path)
     return records
 
 
 def _read_silva_records_with_rejections(
     path: str | Path,
-    domain: str | None = None,
 ) -> tuple[list[SilvaRecord], list[dict[str, str]]]:
-    requested_domain = domain.strip() if domain is not None else None
     records: list[SilvaRecord] = []
     rejected_rows: list[dict[str, str]] = []
 
@@ -258,8 +256,6 @@ def _read_silva_records_with_rejections(
                 }
             )
             continue
-        if requested_domain is not None and taxonomy.domain != requested_domain:
-            continue
         records.append(
             SilvaRecord(
                 fasta_record=fasta_record,
@@ -274,8 +270,7 @@ def _read_silva_records_with_rejections(
 def initialize_silva_build(
     silva_fasta: str | Path,
     outdir: str | Path,
-    domain: str | None = None,
-    type_strain_metadata: str | Path | None = None,
+    type_strain_metadata: str | Path,
 ) -> dict[str, int]:
     """Initialize an autotax2 build from SILVA FASTA records."""
     output_dir = Path(outdir)
@@ -285,7 +280,7 @@ def initialize_silva_build(
     for directory in (registry_dir, silva_dir, logs_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    records, rejected_rows = _read_silva_records_with_rejections(silva_fasta, domain=domain)
+    records, rejected_rows = _read_silva_records_with_rejections(silva_fasta)
     named_records = [record for record in records if not record.is_unresolved]
     unresolved_records = [record for record in records if record.is_unresolved]
     metadata = read_type_strain_metadata(type_strain_metadata) if type_strain_metadata else {}
@@ -1134,7 +1129,7 @@ def _validate_resolve_threshold_scope(
     ]
     if changed:
         raise NotImplementedError(
-            "resolve-silva currently clusters unresolved SILVA records at genus "
+            "The SILVA resolver currently clusters unresolved SILVA records at genus "
             f"and species thresholds only; unsupported threshold overrides: {', '.join(changed)}."
         )
 

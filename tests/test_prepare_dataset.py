@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import shutil
@@ -42,7 +42,7 @@ def test_prepare_dataset_ids_mapping_rejection_and_duplicates(prepare_tmp_dir: P
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",
@@ -96,7 +96,7 @@ def test_prepare_dataset_writes_prepared_ssu_without_internal_extraction_outputs
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",
@@ -132,7 +132,7 @@ def test_prepare_dataset_short_ssu_is_rejected_by_domain_length(prepare_tmp_dir:
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",
@@ -167,7 +167,7 @@ def test_prepare_dataset_outputs_real_newlines_tabs_and_valid_headers(
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",
@@ -211,7 +211,7 @@ def test_prepare_dataset_prefix_conflict_raises_error(prepare_tmp_dir: Path) -> 
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",
@@ -246,7 +246,7 @@ def test_prepare_dataset_name_with_different_prefix_raises_error(
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",

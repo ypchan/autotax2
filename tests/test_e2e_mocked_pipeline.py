@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import gzip
@@ -60,7 +60,7 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert "BACT_NAMED" not in (build / "silva" / "silva_named_backbone.tax.tsv").read_text(encoding="utf-8")
     assert all(row["protected"] == "true" for row in _read_tsv(build / "registry" / "taxon_nodes.tsv"))
 
-    result = runner.invoke(app, ["resolve-silva", "--build", str(build)])
+    result = runner.invoke(app, ["resolve", "--build", str(build)])
     assert result.exit_code == 0, result.output
     unresolved_taxa = _read_tsv(build / "silva" / "silva_unresolved_taxa.tsv")
     unresolved_members = _read_tsv(build / "silva" / "silva_unresolved_members.tsv")
@@ -77,7 +77,7 @@ def test_tiny_mocked_end_to_end_pipeline(
     result = runner.invoke(
         app,
         [
-            "prepare-dataset",
+            "prepare",
             "--build",
             str(build),
             "--name",
@@ -103,7 +103,7 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert len(unique_rows) == len({row["sequence_md5"] for row in membership_rows})
     assert read_fasta(dataset_dir / "prepared.ssu.fa")
 
-    result = runner.invoke(app, ["orient-sina", "--build", str(build), "--dataset", "digester2020"])
+    result = runner.invoke(app, ["orient", "--build", str(build), "--dataset", "digester2020"])
     assert result.exit_code == 0, result.output
     oriented = read_fasta(dataset_dir / "sina.oriented.fa")
     sina_rows = _read_tsv(dataset_dir / "sina.summary.tsv")
@@ -111,7 +111,7 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert {row["strand"] for row in sina_rows} >= {"plus", "minus", "unknown"}
     assert any(row["sina_status"] == "sina_missing_output" for row in sina_rows)
 
-    result = runner.invoke(app, ["cluster-search", "--build", str(build), "--dataset", "digester2020"])
+    result = runner.invoke(app, ["cluster", "--build", str(build), "--dataset", "digester2020"])
     assert result.exit_code == 0, result.output
     assert (dataset_dir / "internal_clusters" / "species_0.987.uc").exists()
     assert (dataset_dir / "internal_clusters" / "genus_0.945.uc").exists()
@@ -177,10 +177,10 @@ def test_all_cli_help_commands_work() -> None:
     commands = [
         [],
         ["init"],
-        ["resolve-silva"],
-        ["prepare-dataset"],
-        ["orient-sina"],
-        ["cluster-search"],
+        ["resolve"],
+        ["prepare"],
+        ["orient"],
+        ["cluster"],
         ["place"],
         ["export"],
         ["summarize"],

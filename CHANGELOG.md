@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 ## 0.1.0 - Unreleased
 
@@ -11,17 +11,17 @@
 - Add Phase 3 `autotax2 init` for SILVA FASTA parsing, optional domain
   filtering, named/unresolved taxonomy split, protected named taxon nodes, and
   initial registry outputs.
-- Add Phase 4 `autotax2 resolve-silva` for mutable SILVA placeholder scaffold
+- Add Phase 4 `autotax2 resolve` for mutable SILVA placeholder framework
   creation, VSEARCH .uc parsing, placeholder reuse/deprecation protection, dry
   runs, and unresolved mapping outputs.
-- Add Phase 5 `autotax2 prepare-dataset` for dataset prefix freezing, internal
+- Add Phase 5 `autotax2 prepare` for dataset prefix freezing, internal
   sequence IDs, normalized/prepared SSU FASTA outputs, MD5 duplicate
   membership, length checks, and preparation summaries from externally
   extracted SSU/16S input FASTA.
-- Add Phase 6 `autotax2 orient-sina` for loose SINA orientation correction,
+- Add Phase 6 `autotax2 orient` for loose SINA orientation correction,
   version recording, failure fallback, missing-output fallback, strand
   detection, and orientation summaries.
-- Add Phase 7 `autotax2 cluster-search` for VSEARCH command wrapping, version
+- Add Phase 7 `autotax2 cluster` for VSEARCH command wrapping, version
   recording, independent rank-threshold clustering, .uc membership parsing,
   current representative FASTA construction, registry search, coverage
   filtering, and cluster search summaries.
@@ -58,7 +58,7 @@
   representatives.
 - Rewrite README as a text-only command-by-command tutorial with first-run,
   single-dataset, and multi-dataset workflows.
-- Remove internal sequence extraction from `prepare-dataset`; dataset FASTA
+- Remove internal sequence extraction from `prepare`; dataset FASTA
   inputs are now explicitly expected to be externally processed SSU/16S
   sequences, and no internal extraction output files are produced.
 - Add dated command audit logs under `logs/` and automatic export format

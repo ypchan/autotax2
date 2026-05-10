@@ -1,4 +1,4 @@
-# autotax2
+﻿# autotax2
 
 autotax2 is a fixed-backbone, rank-aware, incremental rRNA gene reference
 builder. It preserves a stable named SILVA backbone while allowing controlled
@@ -12,15 +12,15 @@ This documentation is intentionally text-only. No workflow diagrams are used.
 
 1. The named SILVA backbone is immutable.
 2. Named SILVA taxa with reliable taxonomy are marked as protected.
-3. SILVA unresolved records may form a mutable placeholder scaffold.
-4. Custom datasets can extend the scaffold, but they cannot overwrite named
+3. SILVA unresolved records may form a mutable placeholder framework.
+4. Custom datasets can extend the framework, but they cannot overwrite named
    SILVA taxa.
 5. Each custom dataset must use a frozen prefix, such as `D20`.
 6. Input sequence IDs are remapped to internal IDs such as `D20_000001`.
 7. Sequence MD5 values are recorded, and exact duplicate sequences are not
    exported repeatedly.
 8. VSEARCH uses fixed `--iddef 2` by default.
-9. `prepare-dataset` expects an externally processed SSU/16S FASTA file.
+9. `prepare` expects an externally processed SSU/16S FASTA file.
 10. autotax2 does not run internal sequence extraction tools and does not
     record external extraction-tool versions.
 11. SINA is used for orientation correction with loose behavior.
@@ -48,16 +48,16 @@ reliable representative source.
 
 ### 2.2 Custom Dataset Input
 
-`autotax2 prepare-dataset` accepts only FASTA files that already contain
+`autotax2 prepare` accepts only FASTA files that already contain
 externally extracted SSU/16S sequences.
 
-If the original data are full-length 16S records, contigs, MAG scaffolds, or
+If the original data are full-length 16S records, contigs, MAG frameworks, or
 records containing non-target flanking sequence, extract the target rRNA region
 before running autotax2. You may use any external preprocessing workflow. For
-example, barrnap can be used before `prepare-dataset`, but autotax2 does not
+example, barrnap can be used before `prepare`, but autotax2 does not
 invoke barrnap, validate barrnap versions, or produce barrnap output files.
 
-The FASTA file passed to `prepare-dataset` should look like this:
+The FASTA file passed to `prepare` should look like this:
 
 ```text
 >sample_001
@@ -67,7 +67,7 @@ ACGT...
 ```
 
 Sequences should already represent the target SSU/16S locus. Orientation may be
-handled later by `orient-sina`.
+handled later by `orient`.
 
 ## 3. Installation
 
@@ -104,10 +104,10 @@ autotax2 init \
 This creates `autotax2_build/` and separates SILVA records into named,
 unresolved, and rejected categories.
 
-### 4.2 Resolve the SILVA Unresolved Scaffold
+### 4.2 Resolve the SILVA unresolved framework
 
 ```bash
-autotax2 resolve-silva \
+autotax2 resolve \
   --build autotax2_build \
   --threads 48
 ```
@@ -125,7 +125,7 @@ digester2020.ssu.fa
 Run:
 
 ```bash
-autotax2 prepare-dataset \
+autotax2 prepare \
   --build autotax2_build \
   --name digester2020 \
   --prefix D20 \
@@ -144,7 +144,7 @@ s__D20s000001
 ### 4.4 Correct Orientation with SINA
 
 ```bash
-autotax2 orient-sina \
+autotax2 orient \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
@@ -153,7 +153,7 @@ autotax2 orient-sina \
 ### 4.5 Cluster and Search with VSEARCH
 
 ```bash
-autotax2 cluster-search \
+autotax2 cluster \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
@@ -210,23 +210,23 @@ Recommended workflow:
 3. Produce `new_dataset.ssu.fa`.
 4. Run the autotax2 dataset workflow.
 
-If you choose to use barrnap, it belongs in step 2, before `prepare-dataset`.
-From `prepare-dataset` onward, autotax2 accepts only the processed SSU/16S FASTA.
+If you choose to use barrnap, it belongs in step 2, before `prepare`.
+From `prepare` onward, autotax2 accepts only the processed SSU/16S FASTA.
 
 ```bash
-autotax2 prepare-dataset \
+autotax2 prepare \
   --build autotax2_build \
   --name new_dataset \
   --prefix ND1 \
   --fasta new_dataset.ssu.fa \
   --domain Bacteria
 
-autotax2 orient-sina \
+autotax2 orient \
   --build autotax2_build \
   --dataset new_dataset \
   --threads 48
 
-autotax2 cluster-search \
+autotax2 cluster \
   --build autotax2_build \
   --dataset new_dataset \
   --threads 48
@@ -268,24 +268,24 @@ dataset_b -> B01
 dataset_c -> C01
 ```
 
-Add datasets sequentially. Each dataset should complete `prepare-dataset ->
-orient-sina -> cluster-search -> place` before the next dataset begins, because
+Add datasets sequentially. Each dataset should complete `prepare ->
+orient -> cluster -> place` before the next dataset begins, because
 later placement runs use the updated registry produced by earlier datasets.
 
 ```bash
-autotax2 prepare-dataset --build autotax2_build --name dataset_a --prefix A01 --fasta dataset_a.ssu.fa --domain Archaea
-autotax2 orient-sina     --build autotax2_build --dataset dataset_a --threads 48
-autotax2 cluster-search  --build autotax2_build --dataset dataset_a --threads 48
+autotax2 prepare --build autotax2_build --name dataset_a --prefix A01 --fasta dataset_a.ssu.fa --domain Archaea
+autotax2 orient     --build autotax2_build --dataset dataset_a --threads 48
+autotax2 cluster  --build autotax2_build --dataset dataset_a --threads 48
 autotax2 place           --build autotax2_build --dataset dataset_a
 
-autotax2 prepare-dataset --build autotax2_build --name dataset_b --prefix B01 --fasta dataset_b.ssu.fa --domain Archaea
-autotax2 orient-sina     --build autotax2_build --dataset dataset_b --threads 48
-autotax2 cluster-search  --build autotax2_build --dataset dataset_b --threads 48
+autotax2 prepare --build autotax2_build --name dataset_b --prefix B01 --fasta dataset_b.ssu.fa --domain Archaea
+autotax2 orient     --build autotax2_build --dataset dataset_b --threads 48
+autotax2 cluster  --build autotax2_build --dataset dataset_b --threads 48
 autotax2 place           --build autotax2_build --dataset dataset_b
 
-autotax2 prepare-dataset --build autotax2_build --name dataset_c --prefix C01 --fasta dataset_c.ssu.fa --domain Archaea
-autotax2 orient-sina     --build autotax2_build --dataset dataset_c --threads 48
-autotax2 cluster-search  --build autotax2_build --dataset dataset_c --threads 48
+autotax2 prepare --build autotax2_build --name dataset_c --prefix C01 --fasta dataset_c.ssu.fa --domain Archaea
+autotax2 orient     --build autotax2_build --dataset dataset_c --threads 48
+autotax2 cluster  --build autotax2_build --dataset dataset_c --threads 48
 autotax2 place           --build autotax2_build --dataset dataset_c
 ```
 
@@ -310,7 +310,7 @@ Classification rules:
 1. If `domain` is empty, missing, or contains an unresolved token such as
    `unidentified`, the SILVA record is rejected.
 2. Rejected records are excluded from both the named backbone and unresolved
-   scaffold.
+   framework.
 3. Rejected records are written to:
 
 ```text
@@ -328,7 +328,7 @@ silva/silva_unresolved.fa
 silva/silva_unresolved.tsv
 ```
 
-6. `resolve-silva` creates SILVA placeholders for supported unresolved ranks.
+6. `resolve` creates SILVA placeholders for supported unresolved ranks.
 
 Example:
 
@@ -412,7 +412,7 @@ Steps:
 4. Apply --domain filtering when requested.
 5. Classify each retained record as named or unresolved.
 6. Write complete reliable records into the named backbone.
-7. Write non-domain unresolved records into the unresolved scaffold.
+7. Write non-domain unresolved records into the unresolved framework.
 8. Read type-strain metadata when provided.
 9. Build protected taxon_nodes, sequence_registry, and representative_registry.
 10. Initialize placeholder counters and the protected SILVA snapshot.
@@ -434,14 +434,14 @@ registry/placeholder_counters.yaml
 registry/protected_taxa_snapshot.tsv
 ```
 
-### 9.2 `autotax2 resolve-silva`
+### 9.2 `autotax2 resolve`
 
-Purpose: resolve SILVA unresolved records into a SILVA placeholder scaffold.
+Purpose: resolve SILVA unresolved records into a SILVA placeholder framework.
 
 Example:
 
 ```bash
-autotax2 resolve-silva \
+autotax2 resolve \
   --build autotax2_build \
   --threads 48
 ```
@@ -508,7 +508,7 @@ registry/name_index.tsv
 registry/cluster_to_taxon.tsv
 ```
 
-### 9.3 `autotax2 prepare-dataset`
+### 9.3 `autotax2 prepare`
 
 Purpose: register a custom dataset, freeze its prefix, remap sequence IDs, and
 record MD5-based de-duplication membership.
@@ -516,7 +516,7 @@ record MD5-based de-duplication membership.
 Example:
 
 ```bash
-autotax2 prepare-dataset \
+autotax2 prepare \
   --build autotax2_build \
   --name digester2020 \
   --prefix D20 \
@@ -576,14 +576,14 @@ datasets/01_<dataset>/sequence_membership.tsv
 datasets/01_<dataset>/prepare_summary.tsv
 ```
 
-### 9.4 `autotax2 orient-sina`
+### 9.4 `autotax2 orient`
 
 Purpose: correct prepared SSU/16S sequence orientation with SINA.
 
 Example:
 
 ```bash
-autotax2 orient-sina \
+autotax2 orient \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
@@ -623,7 +623,7 @@ datasets/01_<dataset>/sina.summary.tsv
 datasets/01_<dataset>/tool_versions.tsv
 ```
 
-### 9.5 `autotax2 cluster-search`
+### 9.5 `autotax2 cluster`
 
 Purpose: cluster the dataset internally and search dataset representatives
 against the current registry representatives.
@@ -631,7 +631,7 @@ against the current registry representatives.
 Example:
 
 ```bash
-autotax2 cluster-search \
+autotax2 cluster \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
@@ -710,7 +710,7 @@ Parameters:
 
 ```text
 --build                 Build directory
---dataset               Cluster-searched dataset name
+--dataset               clustered dataset name
 --near-best-delta       Identity delta for retaining near-best hits, default 0.005
 --rank-consensus        Minimum near-best agreement fraction, default 0.80
 --species-id            Known-like species threshold, default 0.987
@@ -914,7 +914,7 @@ reports/validation_report.tsv
 point. Use the explicit command sequence:
 
 ```text
-prepare-dataset -> orient-sina -> cluster-search -> place
+prepare -> orient -> cluster -> place
 ```
 
 ## 10. Build Directory Layout
@@ -936,7 +936,7 @@ autotax2_build/
 Major CLI commands write dated audit logs, for example:
 
 ```text
-logs/prepare-dataset_date20260510153022.log
+logs/prepare_date20260510153022.log
 logs/place_date20260510153210.log
 logs/export_date20260510153503.log
 ```
@@ -960,7 +960,7 @@ registry/protected_taxa_snapshot.tsv
 
 ### 11.1 Do externally processed 16S datasets need to be extracted again?
 
-No. autotax2 assumes that `prepare-dataset --fasta` already points to target
+No. autotax2 assumes that `prepare --fasta` already points to target
 SSU/16S sequences.
 
 ### 11.2 Does autotax2 run barrnap?
@@ -989,5 +989,5 @@ membership records, but the same sequence MD5 is not exported repeatedly.
 python -m pytest
 python -m compileall autotax2
 autotax2 --help
-autotax2 prepare-dataset --help
+autotax2 prepare --help
 ```

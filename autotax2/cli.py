@@ -20,10 +20,14 @@ from autotax2.silva import initialize_silva_build, resolve_silva_unresolved_buil
 from autotax2.validate import validate_build
 from autotax2.vsearch import cluster_search_dataset
 
+HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
+
 app = typer.Typer(
     name="autotax2",
     help="Fixed-backbone, rank-aware, incremental rRNA gene reference builder.",
     no_args_is_help=True,
+    add_completion=False,
+    context_settings=HELP_CONTEXT,
 )
 console = Console()
 
@@ -42,7 +46,7 @@ class StrandChoice(str, Enum):
     BOTH = "both"
 
 
-@app.command()
+@app.command(context_settings=HELP_CONTEXT)
 def init(
     silva_fasta: Path = typer.Option(
         ...,
@@ -54,22 +58,16 @@ def init(
         "--outdir",
         help="Output build directory to initialize.",
     ),
-    domain: Optional[str] = typer.Option(
-        None,
-        "--domain",
-        help="Optional SILVA domain filter, for example Archaea or Bacteria.",
-    ),
-    type_strain_metadata: Optional[Path] = typer.Option(
-        None,
+    type_strain_metadata: Path = typer.Option(
+        ...,
         "--type-strain-metadata",
-        help="Optional type-strain metadata TSV keyed by seq_id.",
+        help="Required SILVA full_metadata TSV/TSV.gz or autotax2 type-strain metadata TSV.",
     ),
 ) -> None:
     """Initialize a build directory from a SILVA FASTA backbone."""
     summary = initialize_silva_build(
         silva_fasta=silva_fasta,
         outdir=outdir,
-        domain=domain,
         type_strain_metadata=type_strain_metadata,
     )
     console.print(
@@ -83,7 +81,7 @@ def init(
         "init",
         {
             "silva_fasta": silva_fasta,
-            "domain": domain or "",
+            "type_strain_metadata": type_strain_metadata,
             "records": summary["records"],
             "named": summary["named"],
             "unresolved": summary["unresolved"],
@@ -92,7 +90,7 @@ def init(
     )
 
 
-@app.command("resolve-silva")
+@app.command("resolve", context_settings=HELP_CONTEXT)
 def resolve_silva(
     build: Path = typer.Option(
         ...,
@@ -126,7 +124,7 @@ def resolve_silva(
     iddef: int = typer.Option(2, "--iddef", help="VSEARCH --iddef value."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Write proposals without registry updates."),
 ) -> None:
-    """Resolve SILVA unresolved records into a placeholder scaffold."""
+    """Resolve SILVA unresolved records into a placeholder framework."""
     summary = resolve_silva_unresolved_build(
         build=build,
         threads=threads,
@@ -148,7 +146,7 @@ def resolve_silva(
     )
     write_event_log(
         build,
-        "resolve-silva",
+        "resolve",
         {
             "threads": threads,
             "species_id": species_id,
@@ -160,7 +158,7 @@ def resolve_silva(
     )
 
 
-@app.command("prepare-dataset")
+@app.command("prepare", context_settings=HELP_CONTEXT)
 def prepare_dataset_command(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     name: str = typer.Option(..., "--name", help="Dataset name."),
@@ -206,11 +204,11 @@ def prepare_dataset_command(
     )
     console.print(
         "[cyan]Next:[/cyan] "
-        f"autotax2 orient-sina --build {build} --dataset {summary.dataset}"
+        f"autotax2 orient --build {build} --dataset {summary.dataset}"
     )
     write_event_log(
         build,
-        "prepare-dataset",
+        "prepare",
         {
             "dataset": summary.dataset,
             "prefix": summary.prefix,
@@ -222,7 +220,7 @@ def prepare_dataset_command(
     )
 
 
-@app.command("orient-sina")
+@app.command("orient", context_settings=HELP_CONTEXT)
 def orient_sina_command(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     dataset: str = typer.Option(..., "--dataset", help="Prepared dataset name."),
@@ -279,7 +277,7 @@ def orient_sina_command(
     )
     write_event_log(
         build,
-        "orient-sina",
+        "orient",
         {
             "dataset": summary.dataset,
             "threads": threads,
@@ -290,7 +288,7 @@ def orient_sina_command(
     )
 
 
-@app.command("cluster-search")
+@app.command("cluster", context_settings=HELP_CONTEXT)
 def cluster_search_command(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     dataset: str = typer.Option(..., "--dataset", help="Prepared and oriented dataset name."),
@@ -346,7 +344,7 @@ def cluster_search_command(
     )
     write_event_log(
         build,
-        "cluster-search",
+        "cluster",
         {
             "dataset": summary.dataset,
             "threads": threads,
@@ -356,7 +354,7 @@ def cluster_search_command(
     )
 
 
-@app.command("place")
+@app.command("place", context_settings=HELP_CONTEXT)
 def place_command(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     dataset: str = typer.Option(..., "--dataset", help="Cluster-searched dataset name."),
@@ -416,7 +414,7 @@ def place_command(
     )
 
 
-@app.command()
+@app.command(context_settings=HELP_CONTEXT)
 def add(
     dataset_prefix: str = typer.Argument(
         ...,
@@ -430,7 +428,7 @@ def add(
     ),
     fasta: Optional[Path] = typer.Option(None, "--fasta", help="Input FASTA file."),
 ) -> None:
-    """Add a dataset to the incremental reference scaffold."""
+    """Add a dataset to the incremental reference framework."""
     load_config(config)
     console.print(
         "[yellow]add is a placeholder command.[/yellow] "
@@ -438,7 +436,7 @@ def add(
     )
 
 
-@app.command("export")
+@app.command("export", context_settings=HELP_CONTEXT)
 def export_command(
     format_name: str = typer.Argument(
         "all",
@@ -496,7 +494,7 @@ def export_command(
     )
 
 
-@app.command()
+@app.command(context_settings=HELP_CONTEXT)
 def summarize(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     outdir: Optional[Path] = typer.Option(
@@ -522,7 +520,7 @@ def summarize(
     )
 
 
-@app.command()
+@app.command(context_settings=HELP_CONTEXT)
 def validate(
     build: Path = typer.Option(..., "--build", help="Initialized autotax2 build directory."),
     strict: bool = typer.Option(False, "--strict", help="Treat selected warnings as failures."),

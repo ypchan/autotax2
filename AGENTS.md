@@ -1,4 +1,4 @@
-# AGENTS.md
+﻿# AGENTS.md
 
 This file records project rules for future agents working on autotax2.
 
@@ -11,14 +11,14 @@ incremental additions from downstream datasets.
 ## Design Rules
 
 1. SILVA named backbone is immutable.
-2. SILVA unresolved records may form mutable placeholder scaffold.
+2. SILVA unresolved records may form mutable placeholder framework.
 3. Placeholder format:
    - `g__SILVAg000001`
    - `s__SILVAs000001`
    - `g__D20g000001`
    - `s__D20s000001`
 4. Deprecated placeholder IDs are never reused.
-5. Dataset prefix is supplied during `autotax2 prepare-dataset` and then frozen.
+5. Dataset prefix is supplied during `autotax2 prepare` and then frozen.
 6. Input sequence IDs are remapped to internal IDs like `D20_000001`.
 7. Sequence MD5 is stored; exact duplicate sequences are not exported repeatedly.
 8. VSEARCH identity uses fixed `--iddef 2` by default.

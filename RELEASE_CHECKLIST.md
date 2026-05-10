@@ -1,14 +1,14 @@
-# Release Checklist
+﻿# Release Checklist
 
 - [ ] `python -m pip install -e ".[dev]"`
 - [ ] `python -m pytest`
 - [ ] `autotax2 --help`
 - [ ] all subcommand help works:
   - [ ] `autotax2 init --help`
-  - [ ] `autotax2 resolve-silva --help`
-  - [ ] `autotax2 prepare-dataset --help`
-  - [ ] `autotax2 orient-sina --help`
-  - [ ] `autotax2 cluster-search --help`
+  - [ ] `autotax2 resolve --help`
+  - [ ] `autotax2 prepare --help`
+  - [ ] `autotax2 orient --help`
+  - [ ] `autotax2 cluster --help`
   - [ ] `autotax2 place --help`
   - [ ] `autotax2 export --help`
   - [ ] `autotax2 summarize --help`

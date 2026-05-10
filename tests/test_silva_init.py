@@ -26,12 +26,17 @@ def silva_tmp_dir() -> Iterator[Path]:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
+def test_init_includes_all_valid_domains_and_converts_rna_to_dna(silva_tmp_dir: Path) -> None:
     fasta_path = silva_tmp_dir / "silva.fa"
+    metadata_path = silva_tmp_dir / "metadata.tsv"
     outdir = silva_tmp_dir / "build"
     named_taxonomy = (
         "Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
         "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum"
+    )
+    bacterial_taxonomy = (
+        "Bacteria;Pseudomonadota;Gammaproteobacteria;Enterobacterales;"
+        "Vibrionaceae;Vibrio;Vibrio halioticoli"
     )
     fasta_path.write_text(
         f">AR1 {named_taxonomy}\n"
@@ -42,11 +47,11 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
         ">AR3 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
         "Methanobacteriaceae;unidentified;unidentified\n"
         "ACGUACGC\n"
-        ">BA1 Bacteria;Pseudomonadota;Gammaproteobacteria;Enterobacterales;"
-        "Vibrionaceae;Vibrio;Vibrio halioticoli\n"
+        f">BA1 {bacterial_taxonomy}\n"
         "ACGUACGG\n",
         encoding="utf-8",
     )
+    _write_empty_metadata(metadata_path)
 
     result = runner.invoke(
         app,
@@ -56,8 +61,8 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
             str(fasta_path),
             "--outdir",
             str(outdir),
-            "--domain",
-            "Archaea",
+            "--type-strain-metadata",
+            str(metadata_path),
         ],
     )
 
@@ -86,14 +91,17 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
     taxon_rows = _read_tsv(outdir / "registry" / "taxon_nodes.tsv")
     representative_rows = _read_tsv(outdir / "registry" / "representative_registry.tsv")
 
-    assert [record.seq_id for record in named_fasta] == ["AR1"]
+    assert [record.seq_id for record in named_fasta] == ["AR1", "BA1"]
     assert sorted(record.seq_id for record in unresolved_fasta) == ["AR2", "AR3"]
-    assert "BA1" not in {row["seq_id"] for row in sequence_rows}
+    assert "BA1" in {row["seq_id"] for row in sequence_rows}
+    assert all("U" not in record.sequence for record in named_fasta + unresolved_fasta)
 
     assert named_rows[0]["seq_id"] == "AR1"
     assert named_rows[0]["taxonomy_7rank"] == named_taxonomy
     assert named_rows[0]["genus"] == "Methanobacterium"
     assert named_rows[0]["species"] == "Methanobacterium formicicum"
+    assert named_rows[1]["seq_id"] == "BA1"
+    assert named_rows[1]["taxonomy_7rank"] == bacterial_taxonomy
 
     unresolved_by_id = {row["seq_id"]: row for row in unresolved_rows}
     assert unresolved_by_id["AR2"]["lowest_reliable_rank"] == "genus"
@@ -131,6 +139,7 @@ def test_init_domain_filter_and_silva_split(silva_tmp_dir: Path) -> None:
 
 def test_init_rejects_records_with_empty_domain(silva_tmp_dir: Path) -> None:
     fasta_path = silva_tmp_dir / "silva.fa"
+    metadata_path = silva_tmp_dir / "metadata.tsv"
     outdir = silva_tmp_dir / "build"
     fasta_path.write_text(
         ">GOOD Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
@@ -143,10 +152,19 @@ def test_init_rejects_records_with_empty_domain(silva_tmp_dir: Path) -> None:
         "ACGT\n",
         encoding="utf-8",
     )
+    _write_empty_metadata(metadata_path)
 
     result = runner.invoke(
         app,
-        ["init", "--silva-fasta", str(fasta_path), "--outdir", str(outdir)],
+        [
+            "init",
+            "--silva-fasta",
+            str(fasta_path),
+            "--outdir",
+            str(outdir),
+            "--type-strain-metadata",
+            str(metadata_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -159,6 +177,7 @@ def test_init_rejects_records_with_empty_domain(silva_tmp_dir: Path) -> None:
 
 def test_init_outputs_real_tabs_and_newlines(silva_tmp_dir: Path) -> None:
     fasta_path = silva_tmp_dir / "silva.fa"
+    metadata_path = silva_tmp_dir / "metadata.tsv"
     outdir = silva_tmp_dir / "build"
     fasta_path.write_text(
         ">AR1 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
@@ -166,10 +185,19 @@ def test_init_outputs_real_tabs_and_newlines(silva_tmp_dir: Path) -> None:
         "ACGT\n",
         encoding="utf-8",
     )
+    _write_empty_metadata(metadata_path)
 
     result = runner.invoke(
         app,
-        ["init", "--silva-fasta", str(fasta_path), "--outdir", str(outdir)],
+        [
+            "init",
+            "--silva-fasta",
+            str(fasta_path),
+            "--outdir",
+            str(outdir),
+            "--type-strain-metadata",
+            str(metadata_path),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -267,6 +295,32 @@ def test_init_reads_gzipped_silva_full_metadata_type_material(silva_tmp_dir: Pat
     assert representative_rows[0]["representative_reason"] == "type_strain"
     assert sequence_rows["AR2.1.100"]["is_type_strain"] == "true"
     assert sequence_rows["AR2.1.100"]["type_source"] == "SILVA full_metadata"
+
+
+def test_init_requires_type_strain_metadata(silva_tmp_dir: Path) -> None:
+    fasta_path = silva_tmp_dir / "silva.fa"
+    outdir = silva_tmp_dir / "build"
+    fasta_path.write_text(
+        ">AR1 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
+        "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
+        "ACGT\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        ["init", "--silva-fasta", str(fasta_path), "--outdir", str(outdir)],
+    )
+
+    assert result.exit_code != 0
+    assert "type-strain-metadata" in result.output
+
+
+def _write_empty_metadata(path: Path) -> None:
+    path.write_text(
+        "seq_id\tis_type_strain\tspecies_name\tstrain_id\tsource\tevidence\n",
+        encoding="utf-8",
+    )
 
 
 def _read_tsv(path: Path) -> list[dict[str, str]]:

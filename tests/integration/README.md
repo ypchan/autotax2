@@ -1,4 +1,4 @@
-# Optional Real-Tool Integration Tests
+﻿# Optional Real-Tool Integration Tests
 
 These tests are optional. They require real external tools and real input files:
 

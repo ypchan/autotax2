@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typer.testing import CliRunner
 
@@ -18,10 +18,10 @@ def test_root_help_works() -> None:
 def test_placeholder_command_help_works() -> None:
     for command in [
         "init",
-        "resolve-silva",
-        "prepare-dataset",
-        "orient-sina",
-        "cluster-search",
+        "resolve",
+        "prepare",
+        "orient",
+        "cluster",
         "place",
         "add",
         "export",

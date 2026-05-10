@@ -1,4 +1,4 @@
-# autotax2 Demo Workflow
+﻿# autotax2 Demo Workflow
 
 This is the full command sequence for a typical archaeal build. Replace file
 names and dataset metadata with the real project inputs.
@@ -13,23 +13,23 @@ autotax2 init \
   --outdir autotax2_build \
   --domain Archaea
 
-autotax2 resolve-silva \
+autotax2 resolve \
   --build autotax2_build \
   --threads 48
 
-autotax2 prepare-dataset \
+autotax2 prepare \
   --build autotax2_build \
   --name digester2020 \
   --prefix D20 \
   --fasta digester2020.ssu.fa \
   --domain Archaea
 
-autotax2 orient-sina \
+autotax2 orient \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
 
-autotax2 cluster-search \
+autotax2 cluster \
   --build autotax2_build \
   --dataset digester2020 \
   --threads 48
@@ -52,7 +52,7 @@ autotax2 validate \
 Main outputs:
 
 - `registry/`: durable build state.
-- `silva/`: SILVA named backbone and unresolved scaffold outputs.
+- `silva/`: SILVA named backbone and unresolved framework outputs.
 - `datasets/01_digester2020/`: dataset-specific normalized FASTA, prepared
   SSU/16S FASTA, SINA, VSEARCH, placement, and summary files.
 - `export/`: SINTAX, QIIME2, and DADA2 reference files.

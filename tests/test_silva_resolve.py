@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import shutil
@@ -25,12 +25,12 @@ def resolve_tmp_dir() -> Iterator[Path]:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def test_resolve_silva_creates_placeholder_scaffold(resolve_tmp_dir: Path) -> None:
+def test_resolve_silva_creates_placeholder_framework(resolve_tmp_dir: Path) -> None:
     build = _init_resolve_fixture(resolve_tmp_dir)
     named_taxa_before = _named_taxon_signature(build)
     _write_cluster_uc(build)
 
-    result = runner.invoke(app, ["resolve-silva", "--build", str(build), "--threads", "8"])
+    result = runner.invoke(app, ["resolve", "--build", str(build), "--threads", "8"])
 
     assert result.exit_code == 0, result.output
     taxa_rows = _read_tsv(build / "silva" / "silva_unresolved_taxa.tsv")
@@ -70,8 +70,8 @@ def test_resolve_silva_rerun_reuses_existing_cluster_taxa(resolve_tmp_dir: Path)
     build = _init_resolve_fixture(resolve_tmp_dir)
     _write_cluster_uc(build)
 
-    first = runner.invoke(app, ["resolve-silva", "--build", str(build)])
-    second = runner.invoke(app, ["resolve-silva", "--build", str(build)])
+    first = runner.invoke(app, ["resolve", "--build", str(build)])
+    second = runner.invoke(app, ["resolve", "--build", str(build)])
 
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
@@ -97,7 +97,7 @@ def test_resolve_silva_does_not_reuse_deprecated_placeholder(resolve_tmp_dir: Pa
     _write_cluster_uc(build)
     _append_deprecated_taxon(build, "g__SILVAg000001", "genus")
 
-    result = runner.invoke(app, ["resolve-silva", "--build", str(build)])
+    result = runner.invoke(app, ["resolve", "--build", str(build)])
 
     assert result.exit_code == 0, result.output
     taxa_rows = _read_tsv(build / "silva" / "silva_unresolved_taxa.tsv")
@@ -122,7 +122,7 @@ def test_resolve_silva_dry_run_does_not_update_counters(resolve_tmp_dir: Path) -
     )
     before = counters_path.read_text(encoding="utf-8")
 
-    result = runner.invoke(app, ["resolve-silva", "--build", str(build), "--dry-run"])
+    result = runner.invoke(app, ["resolve", "--build", str(build), "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert counters_path.read_text(encoding="utf-8") == before
@@ -134,7 +134,7 @@ def test_resolve_silva_rejects_unimplemented_rank_threshold_overrides(resolve_tm
     build = _init_resolve_fixture(resolve_tmp_dir)
     _write_cluster_uc(build)
 
-    result = runner.invoke(app, ["resolve-silva", "--build", str(build), "--family-id", "0.900"])
+    result = runner.invoke(app, ["resolve", "--build", str(build), "--family-id", "0.900"])
 
     assert result.exit_code != 0
     assert "currently clusters unresolved SILVA records at genus and species" in str(result.exception)
@@ -154,7 +154,7 @@ def test_resolve_silva_with_no_unresolved_records_exits_cleanly(resolve_tmp_dir:
         ["init", "--silva-fasta", str(fasta), "--outdir", str(build)],
     )
 
-    result = runner.invoke(app, ["resolve-silva", "--build", str(build)])
+    result = runner.invoke(app, ["resolve", "--build", str(build)])
 
     assert init_result.exit_code == 0, init_result.output
     assert result.exit_code == 0, result.output
