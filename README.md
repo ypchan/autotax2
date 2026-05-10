@@ -49,6 +49,7 @@ large user datasets. Optional real-tool integration instructions are in
 ## Install for Development
 
 ```bash
+gh repo clone ypchan/autotax2
 python -m pip install -e ".[dev]"
 python -m pytest
 ```
