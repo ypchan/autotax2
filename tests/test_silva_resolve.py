@@ -143,15 +143,25 @@ def test_resolve_silva_rejects_unimplemented_rank_threshold_overrides(resolve_tm
 def test_resolve_silva_with_no_unresolved_records_exits_cleanly(resolve_tmp_dir: Path) -> None:
     build = resolve_tmp_dir / "build"
     fasta = resolve_tmp_dir / "named.fa"
+    metadata = resolve_tmp_dir / "metadata.tsv"
     fasta.write_text(
         ">N1 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
         "Methanobacteriaceae;Methanobacterium;Methanobacterium formicicum\n"
         "ACGT\n",
         encoding="utf-8",
     )
+    _write_empty_metadata(metadata)
     init_result = runner.invoke(
         app,
-        ["init", "--silva-fasta", str(fasta), "--outdir", str(build)],
+        [
+            "init",
+            "--silva-fasta",
+            str(fasta),
+            "--outdir",
+            str(build),
+            "--type-strain-metadata",
+            str(metadata),
+        ],
     )
 
     result = runner.invoke(app, ["resolve", "--build", str(build)])
@@ -166,6 +176,7 @@ def test_resolve_silva_with_no_unresolved_records_exits_cleanly(resolve_tmp_dir:
 def _init_resolve_fixture(tmp_dir: Path) -> Path:
     build = tmp_dir / "build"
     fasta = tmp_dir / "silva.fa"
+    metadata = tmp_dir / "metadata.tsv"
     fasta.write_text(
         ">U2 Archaea;Euryarchaeota;Methanobacteria;Methanobacteriales;"
         "Methanobacteriaceae;unidentified;unidentified\n"
@@ -181,12 +192,28 @@ def _init_resolve_fixture(tmp_dir: Path) -> Path:
         "ACGTACGG\n",
         encoding="utf-8",
     )
+    _write_empty_metadata(metadata)
     result = runner.invoke(
         app,
-        ["init", "--silva-fasta", str(fasta), "--outdir", str(build), "--domain", "Archaea"],
+        [
+            "init",
+            "--silva-fasta",
+            str(fasta),
+            "--outdir",
+            str(build),
+            "--type-strain-metadata",
+            str(metadata),
+        ],
     )
     assert result.exit_code == 0, result.output
     return build
+
+
+def _write_empty_metadata(path: Path) -> None:
+    path.write_text(
+        "seq_id\tis_type_strain\tspecies_name\tstrain_id\tsource\tevidence\n",
+        encoding="utf-8",
+    )
 
 
 def _write_cluster_uc(build: Path) -> None:

@@ -45,8 +45,6 @@ def test_tiny_mocked_end_to_end_pipeline(
             str(FIXTURES / "tiny_silva.fa"),
             "--outdir",
             str(build),
-            "--domain",
-            "Archaea",
             "--type-strain-metadata",
             str(FIXTURES / "type_strains.tsv"),
         ],
@@ -55,9 +53,9 @@ def test_tiny_mocked_end_to_end_pipeline(
     named_fasta = build / "silva" / "silva_named_backbone.fa"
     unresolved_fasta = build / "silva" / "silva_unresolved.fa"
     named_taxa_before = _named_taxon_signature(_read_tsv(build / "registry" / "taxon_nodes.tsv"))
-    assert [record.seq_id for record in read_fasta(named_fasta)] == ["ARCH_NAMED"]
+    assert [record.seq_id for record in read_fasta(named_fasta)] == ["ARCH_NAMED", "BACT_NAMED"]
     assert {record.seq_id for record in read_fasta(unresolved_fasta)} == {"ARCH_SP", "ARCH_UNID"}
-    assert "BACT_NAMED" not in (build / "silva" / "silva_named_backbone.tax.tsv").read_text(encoding="utf-8")
+    assert "BACT_NAMED" in (build / "silva" / "silva_named_backbone.tax.tsv").read_text(encoding="utf-8")
     assert all(row["protected"] == "true" for row in _read_tsv(build / "registry" / "taxon_nodes.tsv"))
 
     result = runner.invoke(app, ["resolve", "--build", str(build)])
