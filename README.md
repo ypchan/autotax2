@@ -14,13 +14,15 @@ autotax2, see `docs/autotax_upstream_notes.md`.
 For the first real SINA/VSEARCH smoke run, see
 `docs/real_run_checklist.md`.
 
-## 0. End-to-End Tutorial
+## End-to-End Tutorial
 
 This section is the recommended read path for a new user. It starts from a
 fresh checkout and ends with classifier-ready exports and validation reports.
-The later command reference gives the full parameter details for each step.
+The tutorial is intentionally unnumbered; the numbered sections after it are
+reference material. The later command reference gives the full parameter details
+for each step.
 
-### 0.1 What autotax2 Does
+### What autotax2 Does
 
 autotax2 builds an incremental SSU/16S reference in three layers:
 
@@ -35,7 +37,7 @@ SILVA taxa, reuse SILVA-derived placeholders, reuse earlier dataset
 placeholders, or create new dataset-specific placeholders. They cannot rename,
 replace, or mutate protected named SILVA taxa.
 
-### 0.2 Required Software
+### Required Software
 
 Required:
 
@@ -56,9 +58,9 @@ sina --version
 If `vsearch` or `sina` is not on `PATH`, pass the executable paths explicitly
 with `--vsearch-bin` and `--sina-bin`.
 
-### 0.3 Install autotax2
+### Install autotax2
 
-Linux/macOS:
+On a Linux server:
 
 ```bash
 git clone <your-autotax2-repo-url>
@@ -71,20 +73,7 @@ autotax2 --help
 python -m pytest
 ```
 
-Windows PowerShell:
-
-```powershell
-git clone <your-autotax2-repo-url>
-cd autotax2
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-python -m pip install -e ".[dev]"
-autotax2 --help
-python -m pytest
-```
-
-### 0.4 Prepare the Official Input Files
+### Prepare the Official Input Files
 
 `init` accepts official files directly, including gzip-compressed files.
 
@@ -116,7 +105,7 @@ dataset.ssu.fa
 This FASTA must already contain extracted SSU/16S sequences. autotax2 does not
 extract rRNA genes from genomes, contigs, MAGs, or amplicon flanking regions.
 
-### 0.5 Choose a Build Directory and Threads
+### Choose a Build Directory and Threads
 
 The build directory is the persistent database. Every later command reads from
 this directory and writes new state back into it.
@@ -129,7 +118,7 @@ THREADS=48
 After initialization, do not manually edit files under `registry/` unless you
 are deliberately repairing a build and understand the registry invariants.
 
-### 0.6 Initialize the SILVA Backbone
+### Initialize the SILVA Backbone
 
 ```bash
 autotax2 init \
@@ -191,7 +180,7 @@ registry/legal_name_catalog.tsv
   Confirms SILVA type-material names and GTDB placeholders were captured.
 ```
 
-### 0.7 Resolve the SILVA Unresolved Framework
+### Resolve the SILVA Unresolved Framework
 
 ```bash
 autotax2 resolve \
@@ -247,7 +236,7 @@ Validate again:
 autotax2 validate --build "$BUILD" --no-check-exports
 ```
 
-### 0.8 Add One Dataset with the Recommended Single Command
+### Add One Dataset with the Recommended Single Command
 
 Use a short, stable prefix for each dataset. The prefix becomes part of internal
 sequence IDs and placeholder IDs. It cannot be changed later for the same
@@ -338,7 +327,7 @@ $BUILD/reports/validation_report.md
 $BUILD/export/
 ```
 
-### 0.9 Add More Datasets Incrementally
+### Add More Datasets Incrementally
 
 Use the same build directory and a new frozen prefix:
 
@@ -368,7 +357,7 @@ The second dataset sees:
 Exact duplicate sequences are recorded as membership evidence but are not
 exported repeatedly.
 
-### 0.10 Manual Step-by-Step Mode
+### Manual Step-by-Step Mode
 
 Use the manual commands when debugging a dataset:
 
@@ -409,7 +398,7 @@ autotax2 validate --build "$BUILD" --check-exports
 Manual mode writes the same registry and report files as `add`; it just exposes
 every intermediate checkpoint.
 
-### 0.11 What to Check When a Run Finishes
+### What to Check When a Run Finishes
 
 For every run, inspect these files first:
 
@@ -435,7 +424,7 @@ datasets/<dataset>/sina_candidate_diagnostics.tsv
   representatives before VSEARCH rescoring.
 ```
 
-### 0.12 Recommended Defaults
+### Recommended Defaults
 
 Use these defaults unless you have a documented reason to change them:
 
