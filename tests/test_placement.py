@@ -43,12 +43,77 @@ def test_place_new_species_under_stable_genus(placement_tmp_dir: Path) -> None:
     dataset_dir = build / "datasets" / "01_digester2020"
     assignments = _read_tsv(dataset_dir / "assignments.tsv")
     created = _read_tsv(dataset_dir / "created_taxa.tsv")
+    evidence = _read_tsv(dataset_dir / "placement_evidence.tsv")
     row = _by_id(assignments, "D20_000002")
+    species_evidence = _by_seq_rank(evidence, "D20_000002", "species")
 
     assert row["identity_status"] == "new_species"
     assert row["final_status"] == "new_species"
     assert row["assigned_taxon_id"] == "s__D20s000001"
     assert any(taxon["name"] == "s__D20s000001" for taxon in created)
+    assert species_evidence["source_stage"] == "dataset_place"
+    assert species_evidence["decision"] == "create_placeholder"
+    assert species_evidence["threshold"] == "0.972"
+    assert species_evidence["best_anchor_identity"] == "0.960"
+    assert species_evidence["output_taxon"] == "s__D20s000001"
+    assert species_evidence["residual_cluster_key"]
+
+
+def test_place_known_like_writes_rank_evidence(placement_tmp_dir: Path) -> None:
+    build = _make_place_build(placement_tmp_dir)
+
+    place_dataset(build, "digester2020")
+
+    evidence = _read_tsv(build / "datasets" / "01_digester2020" / "placement_evidence.tsv")
+    rows = [row for row in evidence if row["seq_id"] == "D20_000001"]
+    species_row = _by_seq_rank(evidence, "D20_000001", "species")
+
+    assert [row["rank"] for row in rows] == ["phylum", "class", "order", "family", "genus", "species"]
+    assert species_row["decision"] == "assign_existing"
+    assert species_row["output_taxon"] == "S1"
+    assert species_row["best_anchor_taxon"] == "S1"
+    assert species_row["best_anchor_identity"] == "0.990"
+
+
+def test_ambiguous_place_keeps_stable_parent_rank_evidence(placement_tmp_dir: Path) -> None:
+    build = _make_place_build(placement_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    registry_dir = build / "registry"
+    _append_row(registry_dir / "taxon_nodes.tsv", _taxon("F3", "family", "f__Otheraceae", "O1"))
+    _append_row(registry_dir / "taxon_nodes.tsv", _taxon("G3", "genus", "g__Othergenus", "F3"))
+    _append_row(registry_dir / "taxon_nodes.tsv", _taxon("S3", "species", "s__Othergenus example", "G3"))
+    _append_row(
+        registry_dir / "representative_registry.tsv",
+        {"representative_seq_id": "REF_C", "taxon_id": "S3", "status": "active"},
+    )
+    _append_row(
+        dataset_dir / "sequence_membership.tsv",
+        _membership("D20_000008", "orig8", "md508", "false"),
+    )
+    _append_row(
+        dataset_dir / "sequence_id_map.tsv",
+        {"internal_seq_id": "D20_000008", "original_seq_id": "orig8", "sequence_md5": "md508"},
+    )
+    with (dataset_dir / "internal_clusters" / "species_0.972.uc").open("a", encoding="utf-8") as handle:
+        handle.write("S\t7\t100\t*\t*\t*\t*\t*\tD20_000008\t*\n")
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000008", "target": "REF_A", "identity": "0.960"})
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000008", "target": "REF_C", "identity": "0.959"})
+
+    place_dataset(build, "digester2020")
+
+    assignments = _read_tsv(dataset_dir / "assignments.tsv")
+    evidence = _read_tsv(dataset_dir / "placement_evidence.tsv")
+    assignment = _by_id(assignments, "D20_000008")
+    order_row = _by_seq_rank(evidence, "D20_000008", "order")
+    family_row = _by_seq_rank(evidence, "D20_000008", "family")
+
+    assert assignment["final_status"] == "ambiguous"
+    assert order_row["decision"] == "assign_existing"
+    assert order_row["output_taxon"] == "O1"
+    assert family_row["decision"] == "ambiguous"
+    assert family_row["output_taxon"] == ""
+    assert "F1" in family_row["competing_anchor_taxa"]
+    assert "F3" in family_row["competing_anchor_taxa"]
 
 
 def test_place_genus_unstable_family_stable_becomes_new_genus(placement_tmp_dir: Path) -> None:
@@ -107,6 +172,137 @@ def test_place_duplicate_md5_does_not_create_taxon(placement_tmp_dir: Path) -> N
     assert row["final_status"] == "duplicate"
     assert row["assigned_taxon_id"] == "S1"
     assert "D20_000006" not in {taxon["representative_seq_id"] for taxon in created}
+
+
+def test_non_type_named_silva_same_species_can_support_known_like(
+    placement_tmp_dir: Path,
+) -> None:
+    build = _make_place_build(placement_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    registry_dir = build / "registry"
+    _append_row(
+        registry_dir / "sequence_registry.tsv",
+        {"seq_id": "REF_A2", "dataset": "SILVA138.2_NR99", "sequence_md5": "md5refa2", "taxon_id": "S1"},
+    )
+    _append_row(
+        dataset_dir / "sequence_membership.tsv",
+        _membership("D20_000007", "orig7", "md507", "false"),
+    )
+    _append_row(
+        dataset_dir / "sequence_id_map.tsv",
+        {"internal_seq_id": "D20_000007", "original_seq_id": "orig7", "sequence_md5": "md507"},
+    )
+    with (dataset_dir / "internal_clusters" / "species_0.972.uc").open("a", encoding="utf-8") as handle:
+        handle.write("S\t6\t100\t*\t*\t*\t*\t*\tD20_000007\t*\n")
+    _append_row(
+        dataset_dir / "vs_registry.filtered.tsv",
+        {"query": "D20_000007", "target": "REF_A", "identity": "0.960"},
+    )
+    _append_row(
+        dataset_dir / "vs_registry.filtered.tsv",
+        {"query": "D20_000007", "target": "REF_A2", "identity": "0.980"},
+    )
+
+    place_dataset(build, "digester2020")
+
+    row = _by_id(_read_tsv(dataset_dir / "assignments.tsv"), "D20_000007")
+    assert row["identity_status"] == "known_like"
+    assert row["final_status"] == "known_like"
+    assert row["best_hit_id"] == "REF_A2"
+    assert row["assigned_taxon_id"] == "S1"
+
+
+def test_species_threshold_conflict_inherits_best_identity_lineage(
+    placement_tmp_dir: Path,
+) -> None:
+    build = _make_place_build(placement_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    registry_dir = build / "registry"
+    _append_row(registry_dir / "taxon_nodes.tsv", _taxon("S4", "species", "s__Methanobacterium conflictus", "G1"))
+    _append_row(registry_dir / "representative_registry.tsv", {"representative_seq_id": "REF_D", "taxon_id": "S4", "status": "active"})
+    _append_row(dataset_dir / "sequence_membership.tsv", _membership("D20_000007", "orig7", "md507", "false"))
+    _append_row(dataset_dir / "sequence_id_map.tsv", {"internal_seq_id": "D20_000007", "original_seq_id": "orig7", "sequence_md5": "md507"})
+    with (dataset_dir / "internal_clusters" / "species_0.972.uc").open("a", encoding="utf-8") as handle:
+        handle.write("S\t6\t100\t*\t*\t*\t*\t*\tD20_000007\t*\n")
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000007", "target": "REF_A", "identity": "0.980"})
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000007", "target": "REF_D", "identity": "0.976"})
+
+    place_dataset(build, "digester2020")
+
+    assignments = _read_tsv(dataset_dir / "assignments.tsv")
+    evidence = _read_tsv(dataset_dir / "placement_evidence.tsv")
+    created = _read_tsv(dataset_dir / "created_taxa.tsv")
+    row = _by_id(assignments, "D20_000007")
+    genus_row = _by_seq_rank(evidence, "D20_000007", "genus")
+    species_row = _by_seq_rank(evidence, "D20_000007", "species")
+
+    assert row["identity_status"] == "known_like"
+    assert row["final_status"] == "known_like"
+    assert row["assigned_taxon_id"] == "S1"
+    assert row["warning"] == "species_consensus_unstable_best_identity_lineage"
+    assert genus_row["decision"] == "assign_existing"
+    assert genus_row["output_taxon"] == "G1"
+    assert species_row["decision"] == "assign_existing"
+    assert species_row["output_taxon"] == "S1"
+    assert species_row["reason"] == "highest_identity_species_lineage"
+    assert set(species_row["competing_anchor_taxa"].split(";")) == {"S1", "S4"}
+    assert "D20_000007" not in {taxon["representative_seq_id"] for taxon in created}
+
+
+def test_species_threshold_top_identity_tie_is_ambiguous(
+    placement_tmp_dir: Path,
+) -> None:
+    build = _make_place_build(placement_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    registry_dir = build / "registry"
+    _append_row(registry_dir / "taxon_nodes.tsv", _taxon("S4", "species", "s__Methanobacterium conflictus", "G1"))
+    _append_row(registry_dir / "representative_registry.tsv", {"representative_seq_id": "REF_D", "taxon_id": "S4", "status": "active"})
+    _append_row(dataset_dir / "sequence_membership.tsv", _membership("D20_000007", "orig7", "md507", "false"))
+    _append_row(dataset_dir / "sequence_id_map.tsv", {"internal_seq_id": "D20_000007", "original_seq_id": "orig7", "sequence_md5": "md507"})
+    with (dataset_dir / "internal_clusters" / "species_0.972.uc").open("a", encoding="utf-8") as handle:
+        handle.write("S\t6\t100\t*\t*\t*\t*\t*\tD20_000007\t*\n")
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000007", "target": "REF_A", "identity": "0.980"})
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000007", "target": "REF_D", "identity": "0.980"})
+
+    place_dataset(build, "digester2020")
+
+    row = _by_id(_read_tsv(dataset_dir / "assignments.tsv"), "D20_000007")
+    species_row = _by_seq_rank(_read_tsv(dataset_dir / "placement_evidence.tsv"), "D20_000007", "species")
+
+    assert row["identity_status"] == "known_like"
+    assert row["final_status"] == "ambiguous"
+    assert row["assigned_taxon_id"] == ""
+    assert row["warning"] == "species_consensus_unstable_top_identity_tie"
+    assert species_row["decision"] == "ambiguous"
+    assert set(species_row["competing_anchor_taxa"].split(";")) == {"S1", "S4"}
+
+
+def test_near_best_hit_below_species_threshold_does_not_break_species_call(
+    placement_tmp_dir: Path,
+) -> None:
+    build = _make_place_build(placement_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    _append_row(dataset_dir / "sequence_membership.tsv", _membership("D20_000007", "orig7", "md507", "false"))
+    _append_row(dataset_dir / "sequence_id_map.tsv", {"internal_seq_id": "D20_000007", "original_seq_id": "orig7", "sequence_md5": "md507"})
+    with (dataset_dir / "internal_clusters" / "species_0.972.uc").open("a", encoding="utf-8") as handle:
+        handle.write("S\t6\t100\t*\t*\t*\t*\t*\tD20_000007\t*\n")
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000007", "target": "REF_A", "identity": "0.973"})
+    _append_row(dataset_dir / "vs_registry.filtered.tsv", {"query": "D20_000007", "target": "REF_B", "identity": "0.970"})
+
+    place_dataset(build, "digester2020")
+
+    assignments = _read_tsv(dataset_dir / "assignments.tsv")
+    evidence = _read_tsv(dataset_dir / "placement_evidence.tsv")
+    row = _by_id(assignments, "D20_000007")
+    species_row = _by_seq_rank(evidence, "D20_000007", "species")
+
+    assert row["identity_status"] == "known_like"
+    assert row["final_status"] == "known_like"
+    assert row["assigned_taxon_id"] == "S1"
+    assert row["species_consensus"] == "s__Methanobacterium formicicum"
+    assert species_row["anchor_count"] == "1"
+    assert species_row["passing_anchor_count"] == "1"
+    assert species_row["competing_anchor_taxa"] == "S1"
 
 
 def test_new_genus_creates_unique_genus_and_species_placeholders(placement_tmp_dir: Path) -> None:
@@ -181,6 +377,7 @@ def test_dry_run_does_not_update_counters(placement_tmp_dir: Path) -> None:
 
     assert after == before
     assert (dataset_dir / "assignments.dry_run.tsv").exists()
+    assert (dataset_dir / "placement_evidence.dry_run.tsv").exists()
     assert not (dataset_dir / "assignments.tsv").exists()
 
 
@@ -331,7 +528,7 @@ def _make_place_build(tmp_path: Path) -> Path:
         [{"dataset": "digester2020", "prefix": "D20"}],
         ["dataset", "prefix"],
     )
-    (cluster_dir / "species_0.987.uc").write_text(
+    (cluster_dir / "species_0.972.uc").write_text(
         "".join(
             f"S\t{index}\t100\t*\t*\t*\t*\t*\tD20_00000{index + 1}\t*\n"
             for index in range(6)
@@ -346,7 +543,7 @@ def _make_place_build(tmp_path: Path) -> Path:
             {"query": "D20_000003", "target": "REF_A", "identity": "0.960"},
             {"query": "D20_000003", "target": "REF_B", "identity": "0.959"},
             {"query": "D20_000004", "target": "REF_A", "identity": "0.900"},
-            {"query": "D20_000005", "target": "REF_A", "identity": "0.700"},
+            {"query": "D20_000005", "target": "REF_A", "identity": "0.690"},
             {"query": "D20_000006", "target": "REF_A", "identity": "0.990"},
         ],
         ["query", "target", "identity"],
@@ -387,6 +584,10 @@ def _by_id(rows: list[dict[str, str]], internal_seq_id: str) -> dict[str, str]:
     return next(row for row in rows if row["internal_seq_id"] == internal_seq_id)
 
 
+def _by_seq_rank(rows: list[dict[str, str]], seq_id: str, rank: str) -> dict[str, str]:
+    return next(row for row in rows if row["seq_id"] == seq_id and row["rank"] == rank)
+
+
 def _named_taxon_signature(rows: list[dict[str, str]]) -> list[tuple[str, str, str, str, str]]:
     return [
         (
@@ -412,6 +613,13 @@ def _write_tsv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) ->
         )
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _append_row(path: Path, row: dict[str, str]) -> None:
+    rows = _read_tsv(path)
+    fieldnames = list(rows[0]) if rows else list(row)
+    rows.append(row)
+    _write_tsv(path, rows, fieldnames)
 
 
 def _read_tsv(path: Path) -> list[dict[str, str]]:

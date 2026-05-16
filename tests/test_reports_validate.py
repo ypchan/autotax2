@@ -34,12 +34,15 @@ def test_summarize_writes_all_report_files(report_tmp_dir: Path) -> None:
         "dataset_delta_summary.tsv",
         "dataset_overlap_matrix.tsv",
         "rank_novelty_summary.tsv",
+        "dataset_rank_overlap_detail.tsv",
+        "dataset_rank_novelty_detail.tsv",
         "source_contribution.tsv",
         "representative_summary.tsv",
         "sequence_dedup_summary.tsv",
     }
-    assert summary.files_written == 7
+    assert summary.files_written == 10
     assert expected == {path.name for path in (build / "reports").glob("*.tsv")}
+    assert (build / "reports" / "dataset_increment_audit.md").exists()
 
 
 def test_global_summary_has_expected_counts(report_tmp_dir: Path) -> None:
@@ -51,6 +54,8 @@ def test_global_summary_has_expected_counts(report_tmp_dir: Path) -> None:
     assert row["custom_datasets"] == "1"
     assert row["active_species"] == "3"
     assert row["active_representatives"] == "3"
+    assert row["silva_unresolved_evidence_records"] == "1"
+    assert row["silva_unresolved_evidence_rows"] == "6"
     assert int(row["duplicate_sequences"]) >= 1
 
 
@@ -63,6 +68,10 @@ def test_dataset_delta_separates_named_and_unresolved_sources(report_tmp_dir: Pa
     assert row["assigned_named_silva"] == "1"
     assert row["assigned_unresolved_silva"] == "1"
     assert row["new_current_dataset"] == "1"
+    assert row["sina_candidate_queries"] == "2"
+    assert row["sina_candidate_targets"] == "2"
+    assert row["sina_candidate_target_matches"] == "2"
+    assert row["placement_evidence_rows"] == "18"
 
 
 def test_dataset_overlap_matrix_includes_exact_sequence_and_species(report_tmp_dir: Path) -> None:
@@ -75,6 +84,52 @@ def test_dataset_overlap_matrix_includes_exact_sequence_and_species(report_tmp_d
     assert "exact_sequence" in ranks
     assert "species" in ranks
     assert any(row["compared_source_type"] == "named_silva" for row in rows)
+
+
+def test_dataset_rank_overlap_detail_lists_rank_taxa_and_relations(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+
+    summarize_build(build)
+
+    rows = _read_tsv(build / "reports" / "dataset_rank_overlap_detail.tsv")
+    species_rows = [row for row in rows if row["rank"] == "species"]
+
+    assert any(row["rank_taxon_id"] == "S1" and row["relation"] == "overlap_named_silva" for row in species_rows)
+    assert any(row["rank_taxon_id"] == "s__SILVAs000001" and row["relation"] == "overlap_unresolved_silva" for row in species_rows)
+    assert any(row["rank_taxon_id"] == "s__D20s000001" and row["relation"] == "new_current_dataset" for row in species_rows)
+    new_species = next(row for row in species_rows if row["rank_taxon_id"] == "s__D20s000001")
+    assert new_species["sequence_ids"] == "D20_000003"
+    assert new_species["evidence_decisions"] == "assign_existing:1"
+
+
+def test_dataset_rank_novelty_detail_lists_supporting_sequences(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+
+    summarize_build(build)
+
+    rows = _read_tsv(build / "reports" / "dataset_rank_novelty_detail.tsv")
+    by_taxon = {row["taxon_id"]: row for row in rows}
+
+    assert by_taxon["g__D20g000001"]["rank"] == "genus"
+    assert by_taxon["g__D20g000001"]["supporting_sequence_ids"] == "D20_000003"
+    assert by_taxon["s__D20s000001"]["rank"] == "species"
+    assert by_taxon["s__D20s000001"]["representative_seq_id"] == "D20_000003"
+    assert by_taxon["s__D20s000001"]["is_placeholder"] == "true"
+
+
+def test_dataset_increment_audit_markdown_summarizes_increment(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+
+    summarize_build(build)
+
+    content = (build / "reports" / "dataset_increment_audit.md").read_text(encoding="utf-8")
+    assert "# autotax2 Dataset Increment Audit" in content
+    assert "## Dataset digester2020 (D20)" in content
+    assert "overlap_named_silva" not in content
+    assert "| species | 1 | 1 | 0 | 1 | 0 | 0 |" in content
+    assert "s__D20s000001" in content
+    assert "D20_000003" in content
+    assert "`placement_evidence.tsv`" in content
 
 
 def test_duplicate_placeholder_detection_fails_validation(report_tmp_dir: Path) -> None:
@@ -236,11 +291,83 @@ def test_validation_reports_are_written(report_tmp_dir: Path) -> None:
     assert "\\n" not in content
 
 
+def test_missing_placement_evidence_warns_in_validation(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+    (build / "datasets" / "01_digester2020" / "placement_evidence.tsv").unlink()
+
+    summary = validate_build(build, check_exports=False)
+
+    assert not summary.failed
+    assert _has_warning(build, "Missing placement evidence")
+
+
+def test_missing_silva_resolve_evidence_warns_in_validation(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+    (build / "silva" / "silva_unresolved_evidence.tsv").unlink()
+
+    summary = validate_build(build, check_exports=False)
+
+    assert not summary.failed
+    assert _has_warning(build, "Missing SILVA unresolved resolve evidence")
+
+
+def test_strict_mode_fails_missing_silva_resolve_evidence(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+    (build / "silva" / "silva_unresolved_evidence.tsv").unlink()
+
+    summary = validate_build(build, strict=True, check_exports=False)
+
+    assert summary.failed
+    assert _has_error(build, "Missing SILVA unresolved resolve evidence")
+
+
+def test_strict_mode_fails_missing_placement_evidence(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+    (build / "datasets" / "01_digester2020" / "placement_evidence.tsv").unlink()
+
+    summary = validate_build(build, strict=True, check_exports=False)
+
+    assert summary.failed
+    assert _has_error(build, "Missing placement evidence")
+
+
+def test_sina_candidate_unmatched_warns_in_validation(report_tmp_dir: Path) -> None:
+    build = _make_report_build(report_tmp_dir)
+    _write_tsv(
+        build / "datasets" / "01_digester2020" / "cluster_search_summary.tsv",
+        [
+            {
+                "dataset": "digester2020",
+                "iddef": "2",
+                "sina_candidate_source": "sina.candidates.tsv",
+                "sina_candidate_queries": "1",
+                "sina_candidate_targets": "1",
+                "sina_candidate_target_matches": "0",
+            }
+        ],
+        [
+            "dataset",
+            "iddef",
+            "sina_candidate_source",
+            "sina_candidate_queries",
+            "sina_candidate_targets",
+            "sina_candidate_target_matches",
+        ],
+    )
+
+    summary = validate_build(build, check_exports=False)
+
+    assert not summary.failed
+    assert _has_warning(build, "SINA candidates had no matching")
+
+
 def _make_report_build(tmp_dir: Path) -> Path:
     build = tmp_dir / "build"
     registry = build / "registry"
+    silva = build / "silva"
     dataset = build / "datasets" / "01_digester2020"
     registry.mkdir(parents=True)
+    silva.mkdir(parents=True)
     dataset.mkdir(parents=True)
     rows = [
         _taxon("D1", "domain", "d__Archaea", "", protected="true", silva_named="true"),
@@ -284,8 +411,8 @@ def _make_report_build(tmp_dir: Path) -> Path:
     _write_tsv(
         registry / "cluster_to_taxon.tsv",
         [
-            {"cluster_key": "D20|genus|F1|0.945|D20_000003", "taxon_id": "g__D20g000001", "rank": "genus", "name": "g__D20g000001", "status": "active", "source_prefix": "D20"},
-            {"cluster_key": "D20|species|g__D20g000001|0.987|D20_000003", "taxon_id": "s__D20s000001", "rank": "species", "name": "s__D20s000001", "status": "active", "source_prefix": "D20"},
+            {"cluster_key": "D20|genus|F1|0.901|D20_000003", "taxon_id": "g__D20g000001", "rank": "genus", "name": "g__D20g000001", "status": "active", "source_prefix": "D20"},
+            {"cluster_key": "D20|species|g__D20g000001|0.972|D20_000003", "taxon_id": "s__D20s000001", "rank": "species", "name": "s__D20s000001", "status": "active", "source_prefix": "D20"},
         ],
         ["cluster_key", "taxon_id", "rank", "name", "status", "source_prefix"],
     )
@@ -319,6 +446,16 @@ def _make_report_build(tmp_dir: Path) -> Path:
     (registry / "current_representatives.fa").write_text(
         "".join(f">{seq_id}\n{seq}\n" for seq_id, seq in sequences.items()),
         encoding="utf-8",
+    )
+    _write_tsv(
+        silva / "silva_unresolved_members.tsv",
+        [{"seq_id": "REF_UNRES", "resolved_taxonomy": "d__Archaea;p__Euryarchaeota;c__Methanobacteria;o__Methanobacteriales;f__Methanobacteriaceae;g__SILVAg000001;s__SILVAs000001"}],
+        ["seq_id", "resolved_taxonomy"],
+    )
+    _write_tsv(
+        silva / "silva_unresolved_evidence.tsv",
+        _resolve_evidence_rows(["REF_UNRES"]),
+        ["source_stage", "dataset", "seq_id", "rank", "decision", "output_taxon"],
     )
     (dataset / "sina.oriented.fa").write_text(
         "".join(f">{seq_id}\n{sequences[seq_id]}\n" for seq_id in ["D20_000001", "D20_000002", "D20_000003"]),
@@ -374,7 +511,33 @@ def _make_report_build(tmp_dir: Path) -> Path:
         [{"representative_seq_id": "D20_000003", "taxon_id": "s__D20s000001", "dataset": "digester2020", "action": "add", "reason": "new_species"}],
         ["representative_seq_id", "taxon_id", "dataset", "action", "reason"],
     )
-    _write_tsv(dataset / "cluster_search_summary.tsv", [{"dataset": "digester2020", "iddef": "2"}], ["dataset", "iddef"])
+    _write_tsv(
+        dataset / "placement_evidence.tsv",
+        _placement_evidence_rows(["D20_000001", "D20_000002", "D20_000003"]),
+        ["source_stage", "dataset", "seq_id", "rank", "decision", "output_taxon"],
+    )
+    _write_tsv(
+        dataset / "sina.candidates.tsv",
+        [
+            {"query": "D20_000001", "target": "REF_NAMED", "sina_score": "0.98", "source_field": "nearest_slv", "rank": "1"},
+            {"query": "D20_000002", "target": "REF_UNRES", "sina_score": "0.97", "source_field": "nearest_slv", "rank": "1"},
+        ],
+        ["query", "target", "sina_score", "source_field", "rank"],
+    )
+    _write_tsv(
+        dataset / "cluster_search_summary.tsv",
+        [
+            {
+                "dataset": "digester2020",
+                "iddef": "2",
+                "sina_candidate_source": "sina.candidates.tsv",
+                "sina_candidate_queries": "2",
+                "sina_candidate_targets": "2",
+                "sina_candidate_target_matches": "2",
+            }
+        ],
+        ["dataset", "iddef", "sina_candidate_source", "sina_candidate_queries", "sina_candidate_targets", "sina_candidate_target_matches"],
+    )
     return build
 
 
@@ -416,6 +579,45 @@ def _remove_representative(build: Path, taxon_id: str) -> None:
 def _has_error(build: Path, text: str) -> bool:
     rows = _read_tsv(build / "reports" / "validation_report.tsv")
     return any(row["level"] == "error" and text.lower() in row["message"].lower() for row in rows)
+
+
+def _has_warning(build: Path, text: str) -> bool:
+    rows = _read_tsv(build / "reports" / "validation_report.tsv")
+    return any(row["level"] == "warning" and text.lower() in row["message"].lower() for row in rows)
+
+
+def _placement_evidence_rows(seq_ids: list[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for seq_id in seq_ids:
+        for rank in ["phylum", "class", "order", "family", "genus", "species"]:
+            rows.append(
+                {
+                    "source_stage": "dataset_place",
+                    "dataset": "digester2020",
+                    "seq_id": seq_id,
+                    "rank": rank,
+                    "decision": "assign_existing",
+                    "output_taxon": rank,
+                }
+            )
+    return rows
+
+
+def _resolve_evidence_rows(seq_ids: list[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for seq_id in seq_ids:
+        for rank in ["phylum", "class", "order", "family", "genus", "species"]:
+            rows.append(
+                {
+                    "source_stage": "silva_resolve",
+                    "dataset": "SILVA138.2_NR99",
+                    "seq_id": seq_id,
+                    "rank": rank,
+                    "decision": "assign_existing",
+                    "output_taxon": rank,
+                }
+            )
+    return rows
 
 
 def _append_tsv(path: Path, row: dict[str, str]) -> None:

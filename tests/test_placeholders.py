@@ -13,6 +13,7 @@ from autotax2.placeholders import (
 @pytest.mark.parametrize(
     ("rank", "prefix", "expected"),
     [
+        (PlaceholderRank.PHYLUM, "SILVA", "p__SILVAp000001"),
         (PlaceholderRank.CLASS, "SILVA", "c__SILVAc000001"),
         (PlaceholderRank.ORDER, "SILVA", "o__SILVAo000001"),
         (PlaceholderRank.FAMILY, "SILVA", "f__SILVAf000001"),

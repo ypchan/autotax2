@@ -10,11 +10,19 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from autotax2.io import FastaRecord, read_fasta, write_fasta
+from autotax2.thresholds import (
+    DEFAULT_CLASS_ID,
+    DEFAULT_FAMILY_ID,
+    DEFAULT_GENUS_ID,
+    DEFAULT_ORDER_ID,
+    DEFAULT_PHYLUM_ID,
+    DEFAULT_SPECIES_ID,
+)
 
 
 DEFAULT_IDDEF = 2
 EXPECTED_VSEARCH_VERSION = "not_pinned"
-CLUSTER_RANKS = ("species", "genus", "family", "order", "class")
+CLUSTER_RANKS = ("species", "genus", "family", "order", "class", "phylum")
 CLUSTER_MEMBER_FIELDS = [
     "cluster_id",
     "centroid_id",
@@ -47,6 +55,7 @@ SUMMARY_FIELDS = [
     "family_centroids",
     "order_centroids",
     "class_centroids",
+    "phylum_centroids",
     "registry_representatives",
     "registry_hits_raw",
     "registry_hits_filtered",
@@ -54,7 +63,23 @@ SUMMARY_FIELDS = [
     "min_query_cov",
     "min_target_cov",
     "near_best_delta",
+    "sina_candidate_source",
+    "sina_candidate_queries",
+    "sina_candidate_targets",
+    "sina_candidate_target_matches",
     "vsearch_version",
+]
+SINA_CANDIDATE_DIAGNOSTIC_FIELDS = [
+    "query",
+    "species_centroid",
+    "is_species_centroid",
+    "candidate_target_count",
+    "candidate_targets",
+    "matched_current_representative_count",
+    "matched_current_representatives",
+    "search_mode",
+    "decision",
+    "reason",
 ]
 TOOL_VERSION_FIELDS = [
     "tool",
@@ -375,23 +400,27 @@ def cluster_search_dataset(
     vsearch_bin: str = "vsearch",
     strict_tool_version: bool = False,
     iddef: int = DEFAULT_IDDEF,
-    species_id: float = 0.987,
-    genus_id: float = 0.945,
-    family_id: float = 0.865,
-    order_id: float = 0.820,
-    class_id: float = 0.785,
-    floor_id: float = 0.750,
+    species_id: float = DEFAULT_SPECIES_ID,
+    genus_id: float = DEFAULT_GENUS_ID,
+    family_id: float = DEFAULT_FAMILY_ID,
+    order_id: float = DEFAULT_ORDER_ID,
+    class_id: float = DEFAULT_CLASS_ID,
+    phylum_id: float = DEFAULT_PHYLUM_ID,
+    floor_id: float | None = None,
     min_query_cov: float = 0.80,
     min_target_cov: float = 0.0,
     maxaccepts: int = 50,
     maxrejects: int = 256,
     near_best_delta: float = 0.005,
     strand: str = "plus",
+    sina_candidates: str | Path | None = None,
+    require_sina_candidates: bool = False,
 ) -> ClusterSearchSummary:
     """Run internal dataset clustering and search centroids against current registry."""
     if strand not in {"plus", "both"}:
         raise ValueError("strand must be plus or both.")
 
+    search_floor = phylum_id if floor_id is None else floor_id
     build_dir = Path(build)
     dataset_dir = _find_dataset_dir(build_dir, dataset)
     oriented_fasta = dataset_dir / "sina.oriented.fa"
@@ -408,9 +437,11 @@ def cluster_search_dataset(
         "family": family_id,
         "order": order_id,
         "class": class_id,
+        "phylum": phylum_id,
     }
     commands: list[list[str]] = []
     centroid_counts: dict[str, int] = {}
+    species_centroid_by_member: dict[str, str] = {}
     for rank, identity in thresholds.items():
         uc_path = clusters_dir / f"{rank}_{identity:.3f}.uc"
         centroids_path = clusters_dir / f"{rank}_{identity:.3f}.centroids.fa"
@@ -434,10 +465,52 @@ def cluster_search_dataset(
             clusters_dir / f"{rank}_{identity:.3f}.members.tsv",
             CLUSTER_MEMBER_FIELDS,
         )
+        if rank == "species":
+            species_centroid_by_member = {
+                membership.member_id: membership.centroid_id for membership in memberships
+            }
         centroid_counts[rank] = len(read_fasta(centroids_path)) if centroids_path.exists() else 0
 
     registry_reps = build_current_representatives(build_dir, current_dataset=dataset)
     reps_fasta = build_dir / "registry" / "current_representatives.fa"
+    search_db_fasta = reps_fasta
+    candidate_source = "not_used"
+    candidate_queries = 0
+    candidate_targets = 0
+    candidate_target_matches = 0
+    candidate_path = _sina_candidate_path(dataset_dir, sina_candidates)
+    if candidate_path is not None:
+        candidate_source = str(candidate_path)
+        candidate_map = _read_sina_candidate_map(candidate_path)
+        candidate_queries = len(candidate_map)
+        candidate_target_ids = _candidate_target_ids(candidate_map)
+        candidate_targets = len(candidate_target_ids)
+        candidate_db = build_dir / "registry" / "current_representatives.sina_candidates.fa"
+        candidate_target_matches = _write_candidate_representative_subset(
+            reps_fasta=reps_fasta,
+            candidate_target_ids=candidate_target_ids,
+            output_fasta=candidate_db,
+        )
+        candidate_search_mode = "candidate_subset" if candidate_target_matches else "full_registry_fallback"
+        if require_sina_candidates and not candidate_target_matches:
+            candidate_search_mode = "no_matching_candidates_fatal"
+        _write_tsv(
+            _sina_candidate_diagnostic_rows(
+                input_records=input_records,
+                candidate_map=candidate_map,
+                reps_fasta=reps_fasta,
+                species_centroid_by_member=species_centroid_by_member,
+                search_mode=candidate_search_mode,
+            ),
+            dataset_dir / "sina_candidate_diagnostics.tsv",
+            SINA_CANDIDATE_DIAGNOSTIC_FIELDS,
+        )
+        if candidate_target_matches:
+            search_db_fasta = candidate_db
+        elif require_sina_candidates:
+            raise RuntimeError(f"No SINA candidate targets matched current representatives: {candidate_path}")
+        else:
+            candidate_source = f"{candidate_path}:unmatched_fallback_full_registry"
     species_centroids = clusters_dir / f"species_{species_id:.3f}.centroids.fa"
     raw_userout = dataset_dir / "vs_registry.raw.tsv"
     vs_registry = dataset_dir / "vs_registry.tsv"
@@ -447,9 +520,9 @@ def cluster_search_dataset(
     if registry_reps > 0 and centroid_counts.get("species", 0) > 0:
         search_command = build_usearch_global_command(
             query_fasta=species_centroids,
-            db_fasta=reps_fasta,
+            db_fasta=search_db_fasta,
             userout_path=raw_userout,
-            identity=floor_id,
+            identity=search_floor,
             iddef=iddef,
             maxaccepts=maxaccepts,
             maxrejects=maxrejects,
@@ -467,7 +540,7 @@ def cluster_search_dataset(
 
     filtered_hits = filter_registry_hits(
         raw_hits,
-        floor_id=floor_id,
+        floor_id=search_floor,
         min_query_cov=min_query_cov,
         min_target_cov=min_target_cov,
     )
@@ -484,6 +557,7 @@ def cluster_search_dataset(
         "family_centroids": str(centroid_counts.get("family", 0)),
         "order_centroids": str(centroid_counts.get("order", 0)),
         "class_centroids": str(centroid_counts.get("class", 0)),
+        "phylum_centroids": str(centroid_counts.get("phylum", 0)),
         "registry_representatives": str(registry_reps),
         "registry_hits_raw": str(len(raw_hits)),
         "registry_hits_filtered": str(len(filtered_hits)),
@@ -491,6 +565,10 @@ def cluster_search_dataset(
         "min_query_cov": str(min_query_cov),
         "min_target_cov": str(min_target_cov),
         "near_best_delta": str(near_best_delta),
+        "sina_candidate_source": candidate_source,
+        "sina_candidate_queries": str(candidate_queries),
+        "sina_candidate_targets": str(candidate_targets),
+        "sina_candidate_target_matches": str(candidate_target_matches),
         "vsearch_version": detected_version,
     }
     _write_tsv([summary_row], dataset_dir / "cluster_search_summary.tsv", SUMMARY_FIELDS)
@@ -505,6 +583,128 @@ def cluster_search_dataset(
         dataset_dir=dataset_dir,
         registry_hits_filtered=len(filtered_hits),
     )
+
+
+def _sina_candidate_path(dataset_dir: Path, override: str | Path | None) -> Path | None:
+    if override is not None:
+        return Path(override)
+    default_path = dataset_dir / "sina.candidates.tsv"
+    return default_path if default_path.exists() else None
+
+
+def _read_sina_candidate_map(path: Path) -> dict[str, set[str]]:
+    rows = _read_tsv(path)
+    candidate_map: dict[str, set[str]] = {}
+    for row in rows:
+        query = row.get("query", "")
+        target = row.get("target", "")
+        if not query or not target:
+            continue
+        candidate_map.setdefault(query, set()).add(target)
+    return candidate_map
+
+
+def _candidate_target_ids(candidate_map: dict[str, set[str]]) -> set[str]:
+    targets: set[str] = set()
+    for raw_targets in candidate_map.values():
+        for target in raw_targets:
+            targets.update(_candidate_target_variants(target))
+    return targets
+
+
+def _sina_candidate_diagnostic_rows(
+    input_records: list[FastaRecord],
+    candidate_map: dict[str, set[str]],
+    reps_fasta: Path,
+    species_centroid_by_member: dict[str, str],
+    search_mode: str,
+) -> list[dict[str, str]]:
+    matched_by_query = _match_candidate_representatives_by_query(reps_fasta, candidate_map)
+    rows: list[dict[str, str]] = []
+    for record in input_records:
+        targets = sorted(candidate_map.get(record.seq_id, set()))
+        matches = sorted(matched_by_query.get(record.seq_id, set()))
+        centroid = species_centroid_by_member.get(record.seq_id, "")
+        is_centroid = str(centroid == record.seq_id).lower()
+        if not targets:
+            decision = "no_sina_candidate"
+            reason = "query had no SINA candidate rows"
+        elif matches:
+            decision = "candidate_targets_matched"
+            reason = "one or more SINA targets matched current representatives"
+        elif search_mode == "no_matching_candidates_fatal":
+            decision = "unmatched_candidate_fatal"
+            reason = "SINA candidates did not match current representatives"
+        elif search_mode == "candidate_subset":
+            decision = "unmatched_candidate_subset"
+            reason = "candidate targets for this query did not match; search uses the matched candidate subset from all queries"
+        else:
+            decision = "unmatched_candidate_full_registry"
+            reason = "SINA candidates did not match current representatives; registry search falls back to full database"
+        rows.append(
+            {
+                "query": record.seq_id,
+                "species_centroid": centroid,
+                "is_species_centroid": is_centroid,
+                "candidate_target_count": str(len(targets)),
+                "candidate_targets": ";".join(targets),
+                "matched_current_representative_count": str(len(matches)),
+                "matched_current_representatives": ";".join(matches),
+                "search_mode": search_mode,
+                "decision": decision,
+                "reason": reason,
+            }
+        )
+    return rows
+
+
+def _match_candidate_representatives_by_query(
+    reps_fasta: Path,
+    candidate_map: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    if not reps_fasta.exists() or not candidate_map:
+        return {}
+    variant_index: dict[str, set[str]] = {}
+    for record in read_fasta(reps_fasta):
+        for variant in _candidate_target_variants(record.seq_id):
+            variant_index.setdefault(variant, set()).add(record.seq_id)
+    matched: dict[str, set[str]] = {}
+    for query, targets in candidate_map.items():
+        for target in targets:
+            for variant in _candidate_target_variants(target):
+                matched.setdefault(query, set()).update(variant_index.get(variant, set()))
+    return {query: reps for query, reps in matched.items() if reps}
+
+
+def _write_candidate_representative_subset(
+    reps_fasta: Path,
+    candidate_target_ids: set[str],
+    output_fasta: Path,
+) -> int:
+    if not reps_fasta.exists() or not candidate_target_ids:
+        write_fasta([], output_fasta)
+        return 0
+    records: list[FastaRecord] = []
+    for record in read_fasta(reps_fasta):
+        if _candidate_target_variants(record.seq_id) & candidate_target_ids:
+            records.append(record)
+    write_fasta(records, output_fasta)
+    return len(records)
+
+
+def _candidate_target_variants(value: str) -> set[str]:
+    clean = value.strip()
+    if not clean:
+        return set()
+    variants = {clean}
+    for separator in ("|", " "):
+        if separator in clean:
+            variants.update(part for part in clean.split(separator) if part)
+    if "." in clean:
+        parts = clean.split(".")
+        for index in range(1, len(parts)):
+            variants.add(".".join(parts[:index]))
+    return {variant.strip() for variant in variants if variant.strip()}
 
 
 def build_current_representatives(build_dir: Path, current_dataset: str | None = None) -> int:
@@ -524,6 +724,7 @@ def build_current_representatives(build_dir: Path, current_dataset: str | None =
     if representative_rows:
         sequences = _sequence_lookup(build_dir)
         taxon_by_id = _taxon_by_id(registry_dir)
+        added_ids: set[str] = set()
         for row in representative_rows:
             seq_id = row.get("representative_seq_id", "")
             sequence = sequences.get(seq_id, "")
@@ -539,6 +740,15 @@ def build_current_representatives(build_dir: Path, current_dataset: str | None =
                     "source": row.get("source_category", "") or row.get("source", ""),
                 }
             )
+            added_ids.add(seq_id)
+        _append_named_silva_species_evidence(
+            registry_dir=registry_dir,
+            sequences=sequences,
+            taxon_by_id=taxon_by_id,
+            records=records,
+            tax_rows=tax_rows,
+            added_ids=added_ids,
+        )
 
     if not records:
         _append_representatives_from_fasta(
@@ -598,6 +808,45 @@ def _append_representatives_from_fasta(
         if " " in record.header:
             taxonomy = record.header.split(maxsplit=1)[1]
         tax_rows.append({"seq_id": record.seq_id, "taxonomy": taxonomy, "source": source})
+
+
+def _append_named_silva_species_evidence(
+    registry_dir: Path,
+    sequences: dict[str, str],
+    taxon_by_id: dict[str, dict[str, str]],
+    records: list[FastaRecord],
+    tax_rows: list[dict[str, str]],
+    added_ids: set[str],
+) -> None:
+    """Add all named SILVA species sequences as search evidence.
+
+    The active representative remains the preferred export sequence, but every
+    named SILVA sequence assigned to the same species can support that species
+    during placement. This prevents a query from becoming a new placeholder
+    solely because the type-strain representative is below the species cutoff
+    while another named strain from the same species is above it.
+    """
+    for row in _read_tsv(registry_dir / "sequence_registry.tsv"):
+        seq_id = row.get("seq_id") or row.get("internal_seq_id", "")
+        if not seq_id or seq_id in added_ids:
+            continue
+        if not _is_true(row.get("is_silva_named", "false")):
+            continue
+        taxon_id = row.get("taxon_id", "")
+        if not taxon_id:
+            continue
+        sequence = sequences.get(seq_id, "")
+        if not sequence:
+            continue
+        records.append(FastaRecord(seq_id=seq_id, header=seq_id, sequence=sequence))
+        tax_rows.append(
+            {
+                "seq_id": seq_id,
+                "taxonomy": _taxonomy_for_taxon(taxon_id, taxon_by_id),
+                "source": "named_silva_species_evidence",
+            }
+        )
+        added_ids.add(seq_id)
 
 
 def _active_representative_rows(registry_dir: Path, current_dataset: str | None) -> list[dict[str, str]]:
@@ -741,3 +990,7 @@ def _write_tsv(rows: Iterable[dict[str, Any]], path: Path, fieldnames: list[str]
         )
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _is_true(value: str) -> bool:
+    return value.strip().lower() in {"true", "1", "yes", "y"}

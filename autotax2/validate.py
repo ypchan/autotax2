@@ -12,9 +12,9 @@ from typing import Any
 from autotax2.export_validation import validate_export_dir
 
 DATASET_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
-PLACEHOLDER_LIKE_RE = re.compile(r"^[cofgs]__[A-Za-z][A-Za-z0-9]*[cofgs][0-9]{6}$")
+PLACEHOLDER_LIKE_RE = re.compile(r"^[pcofgs]__[A-Za-z][A-Za-z0-9]*[pcofgs][0-9]{6}$")
 PLACEHOLDER_ID_RE = re.compile(
-    r"^(?P<rank>[cofgs])__(?P<prefix>[A-Za-z][A-Za-z0-9]*)(?P=rank)(?P<ordinal>[0-9]{6})$"
+    r"^(?P<rank>[pcofgs])__(?P<prefix>[A-Za-z][A-Za-z0-9]*)(?P=rank)(?P<ordinal>[0-9]{6})$"
 )
 RANKS = ("domain", "phylum", "class", "order", "family", "genus", "species")
 RANK_INDEX = {rank: index for index, rank in enumerate(RANKS)}
@@ -84,6 +84,8 @@ def validate_build(
     _check_silva_immutability(ctx, taxon_rows)
     _check_sequence_mapping(ctx)
     _check_representatives(ctx, taxon_by_id)
+    _check_silva_resolve_evidence(ctx)
+    _check_dataset_evidence(ctx)
     if check_exports:
         _check_exports(ctx)
     _check_tool_metadata(ctx)
@@ -330,6 +332,70 @@ def _check_tool_metadata(ctx: _ValidationContext) -> None:
         cluster_summary = _read_tsv(dataset_dir / "cluster_search_summary.tsv")
         if cluster_summary and not cluster_summary[0].get("iddef"):
             ctx.warning("tool_metadata", f"VSEARCH iddef was not recorded for {dataset_dir.name}.", dataset_dir / "cluster_search_summary.tsv", strict_error=True)
+        if (dataset_dir / "sina.candidates.tsv").exists() and cluster_summary:
+            summary_row = cluster_summary[0]
+            if not summary_row.get("sina_candidate_source"):
+                ctx.warning("tool_metadata", f"SINA candidate source was not recorded for {dataset_dir.name}.", dataset_dir / "cluster_search_summary.tsv", strict_error=True)
+            if _int(summary_row.get("sina_candidate_targets")) > 0 and _int(summary_row.get("sina_candidate_target_matches")) == 0:
+                ctx.warning("tool_metadata", f"SINA candidates had no matching current representatives for {dataset_dir.name}; VSEARCH likely used full registry fallback.", dataset_dir / "cluster_search_summary.tsv", strict_error=True)
+
+
+def _check_dataset_evidence(ctx: _ValidationContext) -> None:
+    for dataset_dir in _dataset_dirs(ctx.build_dir):
+        assignments_path = dataset_dir / "assignments.tsv"
+        assignments = _read_tsv(assignments_path)
+        if not assignments:
+            continue
+        evidence_path = dataset_dir / "placement_evidence.tsv"
+        evidence = _read_tsv(evidence_path)
+        if not evidence:
+            ctx.warning("placement_evidence", f"Missing placement evidence for {dataset_dir.name}.", evidence_path, strict_error=True)
+            continue
+        query_ids = {row.get("internal_seq_id", "") for row in assignments if row.get("internal_seq_id")}
+        evidence_by_query: dict[str, set[str]] = {}
+        for row in evidence:
+            seq_id = row.get("seq_id", "")
+            rank = row.get("rank", "")
+            if seq_id and rank:
+                evidence_by_query.setdefault(seq_id, set()).add(rank)
+        missing_queries = sorted(query_id for query_id in query_ids if query_id not in evidence_by_query)
+        for query_id in missing_queries:
+            ctx.warning("placement_evidence", f"Assignment lacks placement evidence rows: {query_id}.", evidence_path, strict_error=True)
+        for query_id, ranks in sorted(evidence_by_query.items()):
+            missing_ranks = [rank for rank in RANKS[1:] if rank not in ranks]
+            if missing_ranks:
+                ctx.warning("placement_evidence", f"Placement evidence for {query_id} lacks ranks: {','.join(missing_ranks)}.", evidence_path, strict_error=True)
+        if not missing_queries and all(all(rank in ranks for rank in RANKS[1:]) for ranks in evidence_by_query.values()):
+            ctx.ok("placement_evidence", f"Placement evidence covers assignments for {dataset_dir.name}.", evidence_path)
+
+
+def _check_silva_resolve_evidence(ctx: _ValidationContext) -> None:
+    silva_dir = ctx.build_dir / "silva"
+    members_path = silva_dir / "silva_unresolved_members.tsv"
+    members = _read_tsv(members_path)
+    if not members:
+        return
+    evidence_path = silva_dir / "silva_unresolved_evidence.tsv"
+    evidence = _read_tsv(evidence_path)
+    if not evidence:
+        ctx.warning("silva_resolve_evidence", "Missing SILVA unresolved resolve evidence.", evidence_path, strict_error=True)
+        return
+    member_ids = {row.get("seq_id", "") for row in members if row.get("seq_id")}
+    evidence_by_seq: dict[str, set[str]] = {}
+    for row in evidence:
+        seq_id = row.get("seq_id", "")
+        rank = row.get("rank", "")
+        if seq_id and rank:
+            evidence_by_seq.setdefault(seq_id, set()).add(rank)
+    missing_members = sorted(seq_id for seq_id in member_ids if seq_id not in evidence_by_seq)
+    for seq_id in missing_members:
+        ctx.warning("silva_resolve_evidence", f"SILVA unresolved member lacks evidence rows: {seq_id}.", evidence_path, strict_error=True)
+    for seq_id, ranks in sorted(evidence_by_seq.items()):
+        missing_ranks = [rank for rank in RANKS[1:] if rank not in ranks]
+        if missing_ranks:
+            ctx.warning("silva_resolve_evidence", f"SILVA resolve evidence for {seq_id} lacks ranks: {','.join(missing_ranks)}.", evidence_path, strict_error=True)
+    if not missing_members and all(all(rank in ranks for rank in RANKS[1:]) for ranks in evidence_by_seq.values()):
+        ctx.ok("silva_resolve_evidence", "SILVA unresolved resolve evidence covers all members.", evidence_path)
 
 
 def _write_validation_reports(
@@ -495,3 +561,10 @@ def _write_tsv(rows: list[dict[str, Any]], path: Path, fieldnames: list[str]) ->
 
 def _is_true(value: str) -> bool:
     return value.strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _int(value: str | None) -> int:
+    try:
+        return int(float(value or "0"))
+    except ValueError:
+        return 0

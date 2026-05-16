@@ -20,10 +20,22 @@ if os.environ.get("AUTOTAX2_RUN_INTEGRATION") != "1":
 def test_real_tools_optional_integration(tmp_path: Path) -> None:
     """Run the optional shell integration workflow against user-provided files."""
     silva_fasta = os.environ.get("AUTOTAX2_INTEGRATION_SILVA_FASTA")
+    type_strain_metadata = os.environ.get("AUTOTAX2_INTEGRATION_TYPE_STRAIN_METADATA")
+    gtdb_ar53_taxonomy = os.environ.get("AUTOTAX2_INTEGRATION_GTDB_AR53_TAXONOMY")
+    gtdb_bac120_taxonomy = os.environ.get("AUTOTAX2_INTEGRATION_GTDB_BAC120_TAXONOMY")
     dataset_fasta = os.environ.get("AUTOTAX2_INTEGRATION_DATASET_FASTA")
-    if not silva_fasta or not dataset_fasta:
+    if not (
+        silva_fasta
+        and type_strain_metadata
+        and gtdb_ar53_taxonomy
+        and gtdb_bac120_taxonomy
+        and dataset_fasta
+    ):
         pytest.skip(
-            "Set AUTOTAX2_INTEGRATION_SILVA_FASTA and "
+            "Set AUTOTAX2_INTEGRATION_SILVA_FASTA, "
+            "AUTOTAX2_INTEGRATION_TYPE_STRAIN_METADATA, "
+            "AUTOTAX2_INTEGRATION_GTDB_AR53_TAXONOMY, "
+            "AUTOTAX2_INTEGRATION_GTDB_BAC120_TAXONOMY, and "
             "AUTOTAX2_INTEGRATION_DATASET_FASTA to run this test."
         )
 
@@ -37,6 +49,12 @@ def test_real_tools_optional_integration(tmp_path: Path) -> None:
         "scripts/run_real_integration_test.sh",
         "--silva-fasta",
         silva_fasta,
+        "--type-strain-metadata",
+        type_strain_metadata,
+        "--gtdb-ar53-taxonomy",
+        gtdb_ar53_taxonomy,
+        "--gtdb-bac120-taxonomy",
+        gtdb_bac120_taxonomy,
         "--dataset-fasta",
         dataset_fasta,
         "--outdir",
@@ -50,6 +68,20 @@ def test_real_tools_optional_integration(tmp_path: Path) -> None:
         "--threads",
         os.environ.get("AUTOTAX2_INTEGRATION_THREADS", "4"),
     ]
+    if os.environ.get("AUTOTAX2_INTEGRATION_SINA_BIN"):
+        command.extend(["--sina-bin", os.environ["AUTOTAX2_INTEGRATION_SINA_BIN"]])
+    if os.environ.get("AUTOTAX2_INTEGRATION_VSEARCH_BIN"):
+        command.extend(["--vsearch-bin", os.environ["AUTOTAX2_INTEGRATION_VSEARCH_BIN"]])
+    if os.environ.get("AUTOTAX2_INTEGRATION_SINA_REFERENCE"):
+        command.extend(["--sina-reference", os.environ["AUTOTAX2_INTEGRATION_SINA_REFERENCE"]])
+    if os.environ.get("AUTOTAX2_INTEGRATION_SINA_SEARCH_DB"):
+        command.extend(["--sina-search-db", os.environ["AUTOTAX2_INTEGRATION_SINA_SEARCH_DB"]])
+    if os.environ.get("AUTOTAX2_INTEGRATION_SEARCH_CANDIDATES", "1") == "0":
+        command.append("--no-search-candidates")
+    if os.environ.get("AUTOTAX2_INTEGRATION_REQUIRE_SINA_CANDIDATES") == "1":
+        command.append("--require-sina-candidates")
+    if os.environ.get("AUTOTAX2_INTEGRATION_STRICT_VALIDATE") == "1":
+        command.append("--strict-validate")
     completed = subprocess.run(
         command,
         check=False,
@@ -73,6 +105,14 @@ def test_real_tools_optional_integration(tmp_path: Path) -> None:
         outdir / "reports" / "dataset_delta_summary.tsv",
         outdir / "reports" / "validation_report.md",
         outdir / "export" / "export_validation.tsv",
+        outdir / "silva" / "silva_unresolved_evidence.tsv",
     ]
     for path in expected_outputs:
         assert path.exists() and path.stat().st_size > 0, path
+
+    dataset_dirs = list((outdir / "datasets").glob(f"*_{os.environ.get('AUTOTAX2_INTEGRATION_DATASET_NAME', 'testdataset')}"))
+    assert dataset_dirs
+    dataset_dir = dataset_dirs[0]
+    assert (dataset_dir / "placement_evidence.tsv").exists()
+    if os.environ.get("AUTOTAX2_INTEGRATION_SEARCH_CANDIDATES", "1") != "0":
+        assert (dataset_dir / "sina_candidate_diagnostics.tsv").exists()

@@ -1,33 +1,60 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 AUTOTAX2_CMD="${AUTOTAX2_CMD:-autotax2}"
+SINA_BIN="${SINA_BIN:-sina}"
+VSEARCH_BIN="${VSEARCH_BIN:-vsearch}"
 
 SILVA_FASTA=""
+TYPE_STRAIN_METADATA=""
+GTDB_AR53_TAXONOMY=""
+GTDB_BAC120_TAXONOMY=""
 DATASET_FASTA=""
 OUTDIR=""
 DOMAIN=""
 DATASET_NAME=""
 PREFIX=""
 THREADS="4"
+SINA_REFERENCE=""
+SINA_SEARCH_DB=""
+SEARCH_CANDIDATES="1"
+SEARCH_MIN_SIM="0.5"
+SEARCH_MAX_RESULT="10"
+REQUIRE_SINA_CANDIDATES="0"
+STRICT_VALIDATE="0"
 
 usage() {
   cat <<'USAGE'
 Run an optional real-tool autotax2 integration workflow.
 
 Required:
-  --silva-fasta PATH
-  --dataset-fasta PATH       externally extracted SSU/16S FASTA
-  --outdir PATH
+  --silva-fasta PATH              official SILVA NR99 taxonomy FASTA
+  --type-strain-metadata PATH     official SILVA full_metadata TSV/TSV.gz
+  --gtdb-ar53-taxonomy PATH       GTDB r232 ar53_taxonomy TSV/TSV.gz
+  --gtdb-bac120-taxonomy PATH     GTDB r232 bac120_taxonomy TSV/TSV.gz
+  --dataset-fasta PATH            externally extracted SSU/16S FASTA
+  --outdir PATH                   empty or nonexistent output build directory
   --domain Archaea|Bacteria
   --dataset-name NAME
   --prefix PREFIX
 
 Optional:
-  --threads INT              default: 4
+  --threads INT                   default: 4
+  --sina-bin PATH                 default: $SINA_BIN or sina
+  --vsearch-bin PATH              default: $VSEARCH_BIN or vsearch
+  --sina-reference PATH           optional SINA reference/PTDB path
+  --sina-search-db PATH           optional SINA search database
+  --search-candidates             default; ask SINA for nearest_slv candidates
+  --no-search-candidates          skip SINA candidate search
+  --search-min-sim FLOAT          default: 0.5
+  --search-max-result INT         default: 10
+  --require-sina-candidates       fail cluster if no SINA targets match registry
+  --strict-validate               run final validate with --strict
 
 Environment:
-  AUTOTAX2_CMD               command to run autotax2, default: autotax2
+  AUTOTAX2_CMD                    command to run autotax2, default: autotax2
+  SINA_BIN                        SINA executable, default: sina
+  VSEARCH_BIN                     VSEARCH executable, default: vsearch
 USAGE
 }
 
@@ -35,6 +62,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --silva-fasta)
       SILVA_FASTA="${2:-}"; shift 2 ;;
+    --type-strain-metadata)
+      TYPE_STRAIN_METADATA="${2:-}"; shift 2 ;;
+    --gtdb-ar53-taxonomy)
+      GTDB_AR53_TAXONOMY="${2:-}"; shift 2 ;;
+    --gtdb-bac120-taxonomy)
+      GTDB_BAC120_TAXONOMY="${2:-}"; shift 2 ;;
     --dataset-fasta)
       DATASET_FASTA="${2:-}"; shift 2 ;;
     --outdir)
@@ -47,6 +80,26 @@ while [[ $# -gt 0 ]]; do
       PREFIX="${2:-}"; shift 2 ;;
     --threads)
       THREADS="${2:-}"; shift 2 ;;
+    --sina-bin)
+      SINA_BIN="${2:-}"; shift 2 ;;
+    --vsearch-bin)
+      VSEARCH_BIN="${2:-}"; shift 2 ;;
+    --sina-reference)
+      SINA_REFERENCE="${2:-}"; shift 2 ;;
+    --sina-search-db)
+      SINA_SEARCH_DB="${2:-}"; shift 2 ;;
+    --search-candidates)
+      SEARCH_CANDIDATES="1"; shift ;;
+    --no-search-candidates)
+      SEARCH_CANDIDATES="0"; shift ;;
+    --search-min-sim)
+      SEARCH_MIN_SIM="${2:-}"; shift 2 ;;
+    --search-max-result)
+      SEARCH_MAX_RESULT="${2:-}"; shift 2 ;;
+    --require-sina-candidates)
+      REQUIRE_SINA_CANDIDATES="1"; shift ;;
+    --strict-validate)
+      STRICT_VALIDATE="1"; shift ;;
     --help|-h)
       usage; exit 0 ;;
     *)
@@ -91,17 +144,29 @@ require_nonempty() {
 }
 
 require_value "--silva-fasta" "$SILVA_FASTA"
+require_value "--type-strain-metadata" "$TYPE_STRAIN_METADATA"
+require_value "--gtdb-ar53-taxonomy" "$GTDB_AR53_TAXONOMY"
+require_value "--gtdb-bac120-taxonomy" "$GTDB_BAC120_TAXONOMY"
 require_value "--dataset-fasta" "$DATASET_FASTA"
 require_value "--outdir" "$OUTDIR"
 require_value "--domain" "$DOMAIN"
 require_value "--dataset-name" "$DATASET_NAME"
 require_value "--prefix" "$PREFIX"
 require_file "$SILVA_FASTA"
+require_file "$TYPE_STRAIN_METADATA"
+require_file "$GTDB_AR53_TAXONOMY"
+require_file "$GTDB_BAC120_TAXONOMY"
 require_file "$DATASET_FASTA"
+if [[ -n "$SINA_REFERENCE" ]]; then
+  require_file "$SINA_REFERENCE"
+fi
+if [[ -n "$SINA_SEARCH_DB" ]]; then
+  require_file "$SINA_SEARCH_DB"
+fi
 
 require_cmd "$AUTOTAX2_CMD"
-require_cmd sina
-require_cmd vsearch
+require_cmd "$SINA_BIN"
+require_cmd "$VSEARCH_BIN"
 require_cmd gzip
 
 if [[ -d "$OUTDIR" ]] && [[ -n "$(find "$OUTDIR" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
@@ -112,19 +177,33 @@ fi
 mkdir -p "$OUTDIR"
 
 echo "[autotax2 integration] Checking external tool availability"
-sina --version >/dev/null 2>&1 || true
-vsearch --version >/dev/null 2>&1 || true
+"$SINA_BIN" --version >/dev/null 2>&1 || true
+"$VSEARCH_BIN" --version >/dev/null 2>&1 || true
 
 echo "[autotax2 integration] init"
 "$AUTOTAX2_CMD" init \
   --silva-fasta "$SILVA_FASTA" \
+  --type-strain-metadata "$TYPE_STRAIN_METADATA" \
+  --gtdb-ar53-taxonomy "$GTDB_AR53_TAXONOMY" \
+  --gtdb-bac120-taxonomy "$GTDB_BAC120_TAXONOMY" \
   --outdir "$OUTDIR" \
-  --domain "$DOMAIN"
+  --threads "$THREADS"
+
+echo "[autotax2 integration] validate after init"
+"$AUTOTAX2_CMD" validate \
+  --build "$OUTDIR" \
+  --no-check-exports
 
 echo "[autotax2 integration] resolve"
 "$AUTOTAX2_CMD" resolve \
   --build "$OUTDIR" \
-  --threads "$THREADS"
+  --threads "$THREADS" \
+  --vsearch-bin "$VSEARCH_BIN"
+
+echo "[autotax2 integration] validate after resolve"
+"$AUTOTAX2_CMD" validate \
+  --build "$OUTDIR" \
+  --no-check-exports
 
 echo "[autotax2 integration] prepare"
 "$AUTOTAX2_CMD" prepare \
@@ -134,35 +213,74 @@ echo "[autotax2 integration] prepare"
   --fasta "$DATASET_FASTA" \
   --domain "$DOMAIN"
 
-echo "[autotax2 integration] orient"
-"$AUTOTAX2_CMD" orient \
-  --build "$OUTDIR" \
-  --dataset "$DATASET_NAME" \
+ORIENT_ARGS=(
+  orient
+  --build "$OUTDIR"
+  --dataset "$DATASET_NAME"
   --threads "$THREADS"
+  --sina-bin "$SINA_BIN"
+)
+if [[ -n "$SINA_REFERENCE" ]]; then
+  ORIENT_ARGS+=(--reference "$SINA_REFERENCE")
+fi
+if [[ "$SEARCH_CANDIDATES" == "1" ]]; then
+  ORIENT_ARGS+=(
+    --search-candidates
+    --search-min-sim "$SEARCH_MIN_SIM"
+    --search-max-result "$SEARCH_MAX_RESULT"
+  )
+  if [[ -n "$SINA_SEARCH_DB" ]]; then
+    ORIENT_ARGS+=(--search-db "$SINA_SEARCH_DB")
+  fi
+else
+  ORIENT_ARGS+=(--no-search-candidates)
+fi
+
+echo "[autotax2 integration] orient"
+"$AUTOTAX2_CMD" "${ORIENT_ARGS[@]}"
+
+CLUSTER_ARGS=(
+  cluster
+  --build "$OUTDIR"
+  --dataset "$DATASET_NAME"
+  --threads "$THREADS"
+  --vsearch-bin "$VSEARCH_BIN"
+)
+if [[ "$REQUIRE_SINA_CANDIDATES" == "1" ]]; then
+  CLUSTER_ARGS+=(--require-sina-candidates)
+fi
 
 echo "[autotax2 integration] cluster"
-"$AUTOTAX2_CMD" cluster \
-  --build "$OUTDIR" \
-  --dataset "$DATASET_NAME" \
-  --threads "$THREADS"
+"$AUTOTAX2_CMD" "${CLUSTER_ARGS[@]}"
 
 echo "[autotax2 integration] place"
 "$AUTOTAX2_CMD" place \
   --build "$OUTDIR" \
   --dataset "$DATASET_NAME"
 
+echo "[autotax2 integration] summarize"
+"$AUTOTAX2_CMD" summarize \
+  --build "$OUTDIR" \
+  --overwrite
+
 echo "[autotax2 integration] export all"
 "$AUTOTAX2_CMD" export all \
   --build "$OUTDIR" \
   --gzip
 
-echo "[autotax2 integration] summarize"
-"$AUTOTAX2_CMD" summarize \
-  --build "$OUTDIR"
+VALIDATE_ARGS=(validate --build "$OUTDIR")
+if [[ "$STRICT_VALIDATE" == "1" ]]; then
+  VALIDATE_ARGS+=(--strict)
+fi
 
-echo "[autotax2 integration] validate"
-"$AUTOTAX2_CMD" validate \
-  --build "$OUTDIR"
+echo "[autotax2 integration] validate final"
+"$AUTOTAX2_CMD" "${VALIDATE_ARGS[@]}"
+
+DATASET_DIR="$(find "$OUTDIR/datasets" -mindepth 1 -maxdepth 1 -type d -name "*_${DATASET_NAME}" | sort | tail -n 1)"
+if [[ -z "$DATASET_DIR" ]]; then
+  echo "Could not find dataset output directory for $DATASET_NAME under $OUTDIR/datasets" >&2
+  exit 1
+fi
 
 SINTAX="$OUTDIR/export/sintax/autotax2.sintax.fa.gz"
 DADA2_GENUS="$OUTDIR/export/dada2/autotax2_toGenus_trainset.fa.gz"
@@ -173,6 +291,9 @@ GLOBAL_SUMMARY="$OUTDIR/reports/global_summary.tsv"
 DATASET_DELTA="$OUTDIR/reports/dataset_delta_summary.tsv"
 VALIDATION_MD="$OUTDIR/reports/validation_report.md"
 EXPORT_VALIDATION="$OUTDIR/export/export_validation.tsv"
+SILVA_EVIDENCE="$OUTDIR/silva/silva_unresolved_evidence.tsv"
+PLACEMENT_EVIDENCE="$DATASET_DIR/placement_evidence.tsv"
+CLUSTER_SUMMARY="$DATASET_DIR/cluster_search_summary.tsv"
 
 echo "[autotax2 integration] post-run file checks"
 for path in \
@@ -184,9 +305,24 @@ for path in \
   "$GLOBAL_SUMMARY" \
   "$DATASET_DELTA" \
   "$VALIDATION_MD" \
-  "$EXPORT_VALIDATION"; do
+  "$EXPORT_VALIDATION" \
+  "$SILVA_EVIDENCE" \
+  "$PLACEMENT_EVIDENCE" \
+  "$CLUSTER_SUMMARY"; do
   require_nonempty "$path"
 done
+
+if [[ "$SEARCH_CANDIDATES" == "1" ]]; then
+  require_nonempty "$DATASET_DIR/sina.candidates.tsv"
+  require_nonempty "$DATASET_DIR/sina_candidate_diagnostics.tsv"
+fi
+
+echo "[autotax2 integration] evidence/report checks"
+grep -q "$(printf 'silva_unresolved_evidence_rows\t')" "$GLOBAL_SUMMARY"
+grep -q "$(printf 'placement_evidence_rows\t')" "$DATASET_DELTA"
+if [[ "$SEARCH_CANDIDATES" == "1" ]]; then
+  grep -q "$(printf 'sina_candidate_queries\t')" "$DATASET_DELTA"
+fi
 
 echo "[autotax2 integration] SINTAX format checks"
 gzip -cd "$SINTAX" | grep -m1 ';tax=d:' >/dev/null

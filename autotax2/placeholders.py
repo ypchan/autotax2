@@ -10,13 +10,14 @@ from autotax2.validate import validate_dataset_prefix
 
 
 PLACEHOLDER_ID_RE = re.compile(
-    r"^(?P<rank>[cofgs])__(?P<prefix>[A-Za-z][A-Za-z0-9]*)(?P=rank)(?P<ordinal>[0-9]{6})$"
+    r"^(?P<rank>[pcofgs])__(?P<prefix>[A-Za-z][A-Za-z0-9]*)(?P=rank)(?P<ordinal>[0-9]{6})$"
 )
 
 
 class PlaceholderRank(str, Enum):
     """Ranks that currently receive generated placeholder IDs."""
 
+    PHYLUM = "p"
     CLASS = "c"
     ORDER = "o"
     FAMILY = "f"

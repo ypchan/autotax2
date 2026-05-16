@@ -1,2 +1,3 @@
-seq_id	is_type_strain	species_name	strain_id	source	evidence
-ARCH_NAMED	true	Methanobacterium formicicum	DSM 1535	fixture	manual
+primaryAccession	organism_name	strain	type_material
+ARCH_NAMED	Methanobacterium formicicum	DSM 1535	type strain
+BACT_NAMED	Vibrio halioticoli	IAM 14596	type strain

@@ -17,11 +17,20 @@ from autotax2.placeholders import (
     make_placeholder_id,
     parse_placeholder_id,
 )
+from autotax2.thresholds import (
+    DEFAULT_CLASS_ID,
+    DEFAULT_FAMILY_ID,
+    DEFAULT_GENUS_ID,
+    DEFAULT_ORDER_ID,
+    DEFAULT_PHYLUM_ID,
+    DEFAULT_SPECIES_ID,
+)
 from autotax2.vsearch import parse_uc_records
 
 
 RANKS = ("domain", "phylum", "class", "order", "family", "genus", "species")
 LOW_TO_HIGH_RANKS = tuple(reversed(RANKS))
+PLACEMENT_EVIDENCE_RANKS = ("phylum", "class", "order", "family", "genus", "species")
 PLACEHOLDER_RANKS = ("class", "order", "family", "genus", "species")
 PLACEHOLDER_RANK_BY_NAME = {
     "class": PlaceholderRank.CLASS,
@@ -126,6 +135,30 @@ REPRESENTATIVE_UPDATE_FIELDS = [
     "action",
     "reason",
 ]
+PLACEMENT_EVIDENCE_FIELDS = [
+    "source_stage",
+    "dataset",
+    "seq_id",
+    "rank",
+    "parent_rank",
+    "parent_taxon",
+    "input_rank_value",
+    "input_rank_status",
+    "threshold",
+    "candidate_scope",
+    "anchor_count",
+    "best_anchor_taxon",
+    "best_anchor_identity",
+    "passing_anchor_count",
+    "competing_anchor_taxa",
+    "residual_cluster_key",
+    "residual_cluster_size",
+    "decision",
+    "output_taxon",
+    "reason",
+    "job_size",
+    "job_threads",
+]
 
 
 @dataclass(frozen=True)
@@ -159,6 +192,7 @@ class RankConsensus:
     name: str
     fraction: float
     hit_count: int
+    support_count: int
     stable: bool
 
 
@@ -190,12 +224,13 @@ def place_dataset(
     dataset: str,
     near_best_delta: float = 0.005,
     rank_consensus: float = 0.80,
-    species_id: float = 0.987,
-    genus_id: float = 0.945,
-    family_id: float = 0.865,
-    order_id: float = 0.820,
-    class_id: float = 0.785,
-    floor_id: float = 0.750,
+    species_id: float = DEFAULT_SPECIES_ID,
+    genus_id: float = DEFAULT_GENUS_ID,
+    family_id: float = DEFAULT_FAMILY_ID,
+    order_id: float = DEFAULT_ORDER_ID,
+    class_id: float = DEFAULT_CLASS_ID,
+    phylum_id: float = DEFAULT_PHYLUM_ID,
+    floor_id: float | None = None,
     dry_run: bool = False,
     allow_ambiguous: bool = True,
 ) -> PlacementSummary:
@@ -213,7 +248,7 @@ def place_dataset(
         "family": family_id,
         "order": order_id,
         "class": class_id,
-        "floor": floor_id,
+        "phylum": phylum_id if floor_id is None else floor_id,
     }
     taxon_rows = _read_tsv(registry_dir / "taxon_nodes.tsv")
     state = PlacementState(
@@ -240,6 +275,7 @@ def place_dataset(
 
     assignment_rows: list[dict[str, str]] = []
     consensus_rows: list[dict[str, str]] = []
+    evidence_rows: list[dict[str, str]] = []
 
     for query_id in query_ids:
         membership = memberships.get(query_id, {})
@@ -264,6 +300,7 @@ def place_dataset(
             raise RuntimeError(f"Ambiguous placement is not allowed: {query_id}")
         assignment_rows.append(placement)
         consensus_rows.extend(placement.pop("_consensus_rows"))
+        evidence_rows.extend(placement.pop("_evidence_rows"))
 
     suffix = ".dry_run.tsv" if dry_run else ".tsv"
     _write_tsv(assignment_rows, dataset_dir / f"assignments{suffix}", ASSIGNMENT_FIELDS)
@@ -272,6 +309,11 @@ def place_dataset(
         consensus_rows,
         dataset_dir / f"near_best_consensus{suffix}",
         CONSENSUS_FIELDS,
+    )
+    _write_tsv(
+        evidence_rows,
+        dataset_dir / f"placement_evidence{suffix}",
+        PLACEMENT_EVIDENCE_FIELDS,
     )
     _write_tsv(
         state.representative_updates,
@@ -330,6 +372,11 @@ def _place_one_query(
             }
         )
         row["_consensus_rows"] = []
+        row["_evidence_rows"] = _duplicate_evidence_rows(
+            query_id=query_id,
+            assigned_taxon_id=assigned_taxon_id,
+            state=state,
+        )
         return row
 
     if not hits:
@@ -342,6 +389,7 @@ def _place_one_query(
         )
         row.update({"identity_status": "unplaced", "final_status": "unplaced"})
         row["_consensus_rows"] = []
+        row["_evidence_rows"] = _no_hit_evidence_rows(query_id=query_id, state=state)
         return row
 
     hits = sorted(hits, key=lambda hit: hit.identity, reverse=True)
@@ -357,6 +405,8 @@ def _place_one_query(
     decision = _decide_placement(
         identity_status=identity_status,
         consensus=consensus,
+        best_identity=best_identity,
+        near_best_hits=near_best_hits,
         query_id=query_id,
         representative_seq_id=query_id,
         state=state,
@@ -409,12 +459,232 @@ def _place_one_query(
         }
         for rank_call in consensus.values()
     ]
+    row["_evidence_rows"] = _placement_evidence_rows(
+        query_id=query_id,
+        best_hit=best_hit,
+        best_identity=best_identity,
+        near_best_hits=near_best_hits,
+        consensus=consensus,
+        identity_status=identity_status,
+        decision=decision,
+        assigned_taxon_id=assigned_taxon_id,
+        state=state,
+    )
     return row
+
+
+def _duplicate_evidence_rows(
+    query_id: str,
+    assigned_taxon_id: str,
+    state: PlacementState,
+) -> list[dict[str, str]]:
+    lineage = _lineage_by_rank(assigned_taxon_id, state)
+    rows: list[dict[str, str]] = []
+    for rank in PLACEMENT_EVIDENCE_RANKS:
+        output_taxon = lineage.get(rank, "")
+        rows.append(
+            _placement_evidence_row(
+                query_id=query_id,
+                rank=rank,
+                state=state,
+                input_rank_status="duplicate_sequence",
+                candidate_scope="sequence_md5",
+                anchor_count=1 if assigned_taxon_id else 0,
+                best_anchor_taxon=output_taxon,
+                best_anchor_identity="1.000" if output_taxon else "",
+                passing_anchor_count=1 if output_taxon else 0,
+                decision="duplicate",
+                output_taxon=output_taxon,
+                reason="exact_sequence_md5_duplicate",
+                job_size=1,
+                job_threads=1,
+            )
+        )
+    return rows
+
+
+def _no_hit_evidence_rows(query_id: str, state: PlacementState) -> list[dict[str, str]]:
+    return [
+        _placement_evidence_row(
+            query_id=query_id,
+            rank=rank,
+            state=state,
+            input_rank_status="no_hit",
+            candidate_scope="near-best hit consensus",
+            anchor_count=0,
+            decision="unplaced",
+            output_taxon="",
+            reason="no_registry_hit",
+            job_size=0,
+            job_threads=1,
+        )
+        for rank in PLACEMENT_EVIDENCE_RANKS
+    ]
+
+
+def _placement_evidence_rows(
+    query_id: str,
+    best_hit: PlacementHit,
+    best_identity: float,
+    near_best_hits: list[PlacementHit],
+    consensus: dict[str, RankConsensus],
+    identity_status: str,
+    decision: dict[str, Any],
+    assigned_taxon_id: str,
+    state: PlacementState,
+) -> list[dict[str, str]]:
+    assigned_lineage = _lineage_by_rank(assigned_taxon_id, state)
+    best_hit_lineage = _lineage_by_rank(best_hit.taxon_id, state)
+    created_ids = set(decision.get("created_taxon_ids", []))
+    current_created_ids = {row.get("taxon_id", "") for row in state.created_taxa}
+    rows: list[dict[str, str]] = []
+    for rank in PLACEMENT_EVIDENCE_RANKS:
+        rank_call = consensus.get(rank)
+        output_taxon = assigned_lineage.get(rank, "")
+        if (
+            not output_taxon
+            and decision["final_status"] == "ambiguous"
+            and rank_call is not None
+            and rank_call.stable
+        ):
+            output_taxon = rank_call.taxon_id
+        created_taxon = output_taxon if output_taxon in created_ids else ""
+        if created_taxon:
+            if created_taxon in current_created_ids:
+                row_decision = "create_placeholder"
+                reason = f"created_from_{decision['final_status']}"
+            else:
+                row_decision = "reuse_placeholder"
+                reason = "reused_cluster_to_taxon_mapping"
+        elif decision["final_status"] == "unplaced":
+            row_decision = "unplaced"
+            reason = "best_identity_below_phylum_threshold"
+        elif rank_call is not None and rank_call.stable and output_taxon:
+            row_decision = "assign_existing"
+            reason = "stable_near_best_consensus"
+        elif decision["final_status"] == "ambiguous":
+            row_decision = "ambiguous"
+            reason = decision.get("warning", "") or f"{rank}_consensus_unstable"
+        elif output_taxon:
+            row_decision = "assign_existing"
+            if decision.get("warning") == "species_consensus_unstable_best_identity_lineage":
+                reason = (
+                    "highest_identity_species_lineage"
+                    if rank == "species"
+                    else "inherited_from_highest_identity_lineage"
+                )
+            else:
+                reason = "inherited_from_assigned_lineage"
+        else:
+            row_decision = "ambiguous"
+            reason = decision.get("warning", "") or f"{rank}_consensus_unstable"
+
+        rows.append(
+            _placement_evidence_row(
+                query_id=query_id,
+                rank=rank,
+                state=state,
+                input_rank_status=identity_status,
+                candidate_scope="near-best hit consensus",
+                anchor_count=rank_call.hit_count if rank_call is not None else 0,
+                best_anchor_taxon=best_hit_lineage.get(rank, ""),
+                best_anchor_identity=f"{best_identity:.3f}",
+                passing_anchor_count=rank_call.support_count if rank_call is not None else 0,
+                competing_anchor_taxa=_competing_rank_taxa(near_best_hits, rank, state),
+                residual_cluster_key=_created_cluster_key(created_taxon, state),
+                residual_cluster_size=1 if created_taxon else 0,
+                decision=row_decision,
+                output_taxon=output_taxon,
+                reason=reason,
+                job_size=len(near_best_hits),
+                job_threads=1,
+            )
+        )
+    return rows
+
+
+def _placement_evidence_row(
+    query_id: str,
+    rank: str,
+    state: PlacementState,
+    input_rank_status: str,
+    candidate_scope: str,
+    anchor_count: int,
+    decision: str,
+    output_taxon: str,
+    reason: str,
+    job_size: int,
+    job_threads: int,
+    best_anchor_taxon: str = "",
+    best_anchor_identity: str = "",
+    passing_anchor_count: int = 0,
+    competing_anchor_taxa: str = "",
+    residual_cluster_key: str = "",
+    residual_cluster_size: int = 0,
+) -> dict[str, str]:
+    rank_index = RANKS.index(rank)
+    parent_rank = RANKS[rank_index - 1] if rank_index > 0 else ""
+    parent_taxon = _parent_taxon_from_output(output_taxon, state)
+    return {
+        "source_stage": "dataset_place",
+        "dataset": state.dataset,
+        "seq_id": query_id,
+        "rank": rank,
+        "parent_rank": parent_rank,
+        "parent_taxon": parent_taxon,
+        "input_rank_value": "",
+        "input_rank_status": input_rank_status,
+        "threshold": f"{state.thresholds.get(rank, 0.0):.3f}",
+        "candidate_scope": candidate_scope,
+        "anchor_count": str(anchor_count),
+        "best_anchor_taxon": best_anchor_taxon,
+        "best_anchor_identity": best_anchor_identity,
+        "passing_anchor_count": str(passing_anchor_count),
+        "competing_anchor_taxa": competing_anchor_taxa,
+        "residual_cluster_key": residual_cluster_key,
+        "residual_cluster_size": str(residual_cluster_size),
+        "decision": decision,
+        "output_taxon": output_taxon,
+        "reason": reason,
+        "job_size": str(job_size),
+        "job_threads": str(job_threads),
+    }
+
+
+def _parent_taxon_from_output(taxon_id: str, state: PlacementState) -> str:
+    if not taxon_id:
+        return ""
+    return state.taxon_by_id.get(taxon_id, {}).get("parent_taxon_id", "")
+
+
+def _created_cluster_key(taxon_id: str, state: PlacementState) -> str:
+    if not taxon_id:
+        return ""
+    return state.taxon_by_id.get(taxon_id, {}).get("cluster_key", "")
+
+
+def _competing_rank_taxa(
+    hits: list[PlacementHit],
+    rank: str,
+    state: PlacementState,
+) -> str:
+    threshold = state.thresholds.get(rank, 0.0)
+    taxa = sorted(
+        {
+            _lineage_by_rank(hit.taxon_id, state).get(rank, "")
+            for hit in hits
+            if hit.identity >= threshold
+            if _lineage_by_rank(hit.taxon_id, state).get(rank, "")
+        }
+    )
+    return ";".join(taxa)
 
 
 def _decide_placement(
     identity_status: str,
     consensus: dict[str, RankConsensus],
+    best_identity: float,
+    near_best_hits: list[PlacementHit],
     query_id: str,
     representative_seq_id: str,
     state: PlacementState,
@@ -426,6 +696,24 @@ def _decide_placement(
         species = _stable_taxon(consensus, "species")
         if species:
             return _placement_decision("known_like", species, [], "")
+        best_species = _unique_top_identity_species(
+            hits=near_best_hits,
+            best_identity=best_identity,
+            state=state,
+        )
+        if best_species:
+            return _placement_decision(
+                "known_like",
+                best_species,
+                [],
+                "species_consensus_unstable_best_identity_lineage",
+            )
+        return _placement_decision(
+            "ambiguous",
+            "",
+            [],
+            "species_consensus_unstable_top_identity_tie",
+        )
         genus = _stable_taxon(consensus, "genus")
         if genus:
             created = _create_lineage(
@@ -589,7 +877,7 @@ def _create_lineage(
     current_parent = parent_taxon_id
     for rank in ranks:
         threshold_rank = rank if rank in state.thresholds else THRESHOLD_BY_STATUS[final_status]
-        threshold = state.thresholds.get(threshold_rank, state.thresholds["floor"])
+        threshold = state.thresholds.get(threshold_rank, state.thresholds["phylum"])
         cluster_key = f"{state.prefix}|{rank}|{current_parent}|{threshold:.3f}|{query_id}"
         existing_taxon_id = state.active_cluster_to_taxon.get(cluster_key)
         if existing_taxon_id:
@@ -633,31 +921,53 @@ def _create_lineage(
     return created_or_reused
 
 
+def _unique_top_identity_species(
+    hits: list[PlacementHit],
+    best_identity: float,
+    state: PlacementState,
+) -> str:
+    top_species = {
+        _lineage_by_rank(hit.taxon_id, state).get("species", "")
+        for hit in hits
+        if abs(hit.identity - best_identity) <= 1e-12
+        and hit.identity >= state.thresholds["species"]
+    }
+    top_species.discard("")
+    if len(top_species) == 1:
+        return next(iter(top_species))
+    return ""
+
+
 def _rank_consensus(
     hits: list[PlacementHit],
     state: PlacementState,
     rank_consensus: float,
 ) -> dict[str, RankConsensus]:
     consensus: dict[str, RankConsensus] = {}
-    hit_count = len(hits)
     for rank in RANKS:
         counts: Counter[str] = Counter()
-        for hit in hits:
+        counted_rank_taxa: set[str] = set()
+        rank_threshold = state.thresholds.get(rank, 0.0)
+        rank_hits = [hit for hit in hits if hit.identity >= rank_threshold]
+        for hit in rank_hits:
             lineage = _lineage_by_rank(hit.taxon_id, state)
             taxon_id = lineage.get(rank, "")
-            if taxon_id:
+            if taxon_id and taxon_id not in counted_rank_taxa:
                 counts[taxon_id] += 1
+                counted_rank_taxa.add(taxon_id)
+        evidence_count = len(counted_rank_taxa)
         if not counts:
-            consensus[rank] = RankConsensus(rank, "", "", 0.0, hit_count, False)
+            consensus[rank] = RankConsensus(rank, "", "", 0.0, evidence_count, 0, False)
             continue
         taxon_id, count = counts.most_common(1)[0]
-        fraction = count / hit_count if hit_count else 0.0
+        fraction = count / evidence_count if evidence_count else 0.0
         consensus[rank] = RankConsensus(
             rank=rank,
             taxon_id=taxon_id,
             name=state.taxon_by_id.get(taxon_id, {}).get("name", taxon_id),
             fraction=fraction,
-            hit_count=hit_count,
+            hit_count=evidence_count,
+            support_count=count,
             stable=fraction >= rank_consensus,
         )
     return consensus
@@ -674,7 +984,7 @@ def _identity_status(identity: float, thresholds: dict[str, float]) -> str:
         return "new_family"
     if identity >= thresholds["class"]:
         return "new_order"
-    if identity >= thresholds["floor"]:
+    if identity >= thresholds["phylum"]:
         return "new_class"
     return "unplaced"
 

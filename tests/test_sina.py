@@ -14,6 +14,7 @@ from autotax2.sina import (
     build_sina_command,
     check_sina_version,
     orient_dataset_with_sina,
+    parse_sina_candidate_csv,
     reverse_complement,
 )
 
@@ -46,6 +47,53 @@ def test_sina_command_builder_includes_reference() -> None:
     assert "ref.ptdb" in command
 
 
+def test_sina_command_builder_can_request_search_candidates() -> None:
+    command = build_sina_command(
+        "in.fa",
+        "out.fa",
+        search_candidates=True,
+        search_output_csv="candidates.csv",
+        search_db="search.arb",
+        search_min_sim=0.650,
+        search_max_result=100,
+    )
+
+    assert command[command.index("-o") + 1 : command.index("--threads")] == ["out.fa", "candidates.csv"]
+    assert "--search" in command
+    assert "--search-db" in command
+    assert "search.arb" in command
+    assert "--fields" in command
+    assert command[command.index("--fields") + 1] == "name,nearest_slv"
+
+
+def test_sina_candidate_search_defaults_are_loose() -> None:
+    command = build_sina_command(
+        "in.fa",
+        "out.fa",
+        search_candidates=True,
+        search_output_csv="candidates.csv",
+    )
+
+    assert command[command.index("--search-min-sim") + 1] == "0.500"
+    assert command[command.index("--search-max-result") + 1] == "10"
+
+
+def test_parse_sina_candidate_csv_reads_nearest_slv(sina_tmp_dir: Path) -> None:
+    path = sina_tmp_dir / "sina.candidates.csv"
+    path.write_text(
+        "name,nearest_slv\n"
+        'D20_000001,"REF_A~0.98;REF_B~0.97"\n',
+        encoding="utf-8",
+    )
+
+    rows = parse_sina_candidate_csv(path)
+
+    assert rows == [
+        {"query": "D20_000001", "target": "REF_A", "sina_score": "0.98", "source_field": "nearest_slv", "rank": "1"},
+        {"query": "D20_000001", "target": "REF_B", "sina_score": "0.97", "source_field": "nearest_slv", "rank": "2"},
+    ]
+
+
 def test_version_parser_handles_typical_version_string(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args, **kwargs):
         return subprocess.CompletedProcess(args[0], 0, stdout="SINA 1.7.2\n", stderr="")
@@ -72,6 +120,29 @@ def test_orient_sina_output_equal_input_is_plus_high_confidence(
     assert rows[0]["orientation_confidence"] == "high"
     assert rows[0]["sequence_changed"] == "false"
     assert [record.seq_id for record in records] == ["D20_000001"]
+
+
+def test_orient_sina_search_candidates_writes_tsv(
+    sina_tmp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_dir = _make_dataset(sina_tmp_dir, {"D20_000001": "ACGTACGT"})
+    _mock_sina_run_with_candidates(
+        monkeypatch,
+        fasta_text=">D20_000001\nACGTACGT\n",
+        candidate_csv='name,nearest_slv\nD20_000001,"REF_A~0.98;REF_B~0.97"\n',
+    )
+
+    orient_dataset_with_sina(
+        sina_tmp_dir / "build",
+        "digester2020",
+        search_candidates=True,
+    )
+
+    rows = _read_tsv(dataset_dir / "sina.candidates.tsv")
+
+    assert [row["target"] for row in rows] == ["REF_A", "REF_B"]
+    assert rows[0]["query"] == "D20_000001"
 
 
 def test_orient_sina_reverse_complement_is_minus_high_confidence(
@@ -211,6 +282,26 @@ def _mock_sina_run(
             return subprocess.CompletedProcess(command, 0, stdout="SINA 1.7.2\n", stderr="")
         output_path = Path(command[command.index("-o") + 1])
         output_path.write_text(output_factory(), encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="mock sina\n")
+
+    monkeypatch.setattr("autotax2.sina.subprocess.run", fake_run)
+
+
+def _mock_sina_run_with_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    fasta_text: str,
+    candidate_csv: str,
+) -> None:
+    def fake_run(command, *args, **kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="SINA 1.7.2\n", stderr="")
+        output_index = command.index("-o") + 1
+        output_path = Path(command[output_index])
+        output_path.write_text(fasta_text, encoding="utf-8")
+        for value in command[output_index + 1 : command.index("--threads")]:
+            extra_output = Path(value)
+            if extra_output.suffix == ".csv":
+                extra_output.write_text(candidate_csv, encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="mock sina\n")
 
     monkeypatch.setattr("autotax2.sina.subprocess.run", fake_run)

@@ -47,6 +47,10 @@ def test_tiny_mocked_end_to_end_pipeline(
             str(build),
             "--type-strain-metadata",
             str(FIXTURES / "type_strains.tsv"),
+            "--gtdb-ar53-taxonomy",
+            str(FIXTURES / "gtdb_ar53_taxonomy_r232.tsv"),
+            "--gtdb-bac120-taxonomy",
+            str(FIXTURES / "gtdb_bac120_taxonomy_r232.tsv"),
         ],
     )
     assert result.exit_code == 0, result.output
@@ -111,8 +115,8 @@ def test_tiny_mocked_end_to_end_pipeline(
 
     result = runner.invoke(app, ["cluster", "--build", str(build), "--dataset", "digester2020"])
     assert result.exit_code == 0, result.output
-    assert (dataset_dir / "internal_clusters" / "species_0.987.uc").exists()
-    assert (dataset_dir / "internal_clusters" / "genus_0.945.uc").exists()
+    assert (dataset_dir / "internal_clusters" / "species_0.972.uc").exists()
+    assert (dataset_dir / "internal_clusters" / "genus_0.901.uc").exists()
     hits = _read_tsv(dataset_dir / "vs_registry.filtered.tsv")
     assert len([row for row in hits if row["query"] == "D20_000004"]) == 2
 
@@ -171,6 +175,66 @@ def test_tiny_mocked_end_to_end_pipeline(
     assert (report_dir / "validation_report.tsv").exists()
 
 
+def test_add_command_orchestrates_dataset_workflow(
+    e2e_tmp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build = e2e_tmp_dir / "autotax2_build"
+    _mock_external_tools(monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--silva-fasta",
+            str(FIXTURES / "tiny_silva.fa"),
+            "--outdir",
+            str(build),
+            "--type-strain-metadata",
+            str(FIXTURES / "type_strains.tsv"),
+            "--gtdb-ar53-taxonomy",
+            str(FIXTURES / "gtdb_ar53_taxonomy_r232.tsv"),
+            "--gtdb-bac120-taxonomy",
+            str(FIXTURES / "gtdb_bac120_taxonomy_r232.tsv"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    result = runner.invoke(app, ["resolve", "--build", str(build)])
+    assert result.exit_code == 0, result.output
+
+    result = runner.invoke(
+        app,
+        [
+            "add",
+            "--build",
+            str(build),
+            "--name",
+            "digester2020",
+            "--prefix",
+            "D20",
+            "--fasta",
+            str(FIXTURES / "tiny_dataset_d20.fa"),
+            "--domain",
+            "Archaea",
+            "--threads",
+            "4",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Completed dataset add workflow" in result.output
+
+    dataset_dir = build / "datasets" / "01_digester2020"
+    assert (dataset_dir / "sina.oriented.fa").exists()
+    assert (dataset_dir / "internal_clusters" / "species_0.972.uc").exists()
+    assert (dataset_dir / "assignments.tsv").exists()
+    assert (dataset_dir / "placement_evidence.tsv").exists()
+    assert (dataset_dir / "sina_candidate_diagnostics.tsv").exists()
+    assert (build / "reports" / "global_summary.tsv").exists()
+    assert (build / "reports" / "validation_report.tsv").exists()
+    assert any(path.name.startswith("add_date") for path in (build / "logs").glob("*.log"))
+
+
 def test_all_cli_help_commands_work() -> None:
     commands = [
         [],
@@ -217,9 +281,9 @@ def _mock_external_tools(monkeypatch: pytest.MonkeyPatch) -> None:
         del args
         uc_path = Path(uc_path)
         if "species_" in uc_path.name:
-            shutil.copyfile(FIXTURES / "fake_species_0.987.uc", uc_path)
+            shutil.copyfile(FIXTURES / "fake_species_0.972.uc", uc_path)
         elif "genus_" in uc_path.name:
-            shutil.copyfile(FIXTURES / "fake_genus_0.945.uc", uc_path)
+            shutil.copyfile(FIXTURES / "fake_genus_0.901.uc", uc_path)
         else:
             ids = [record.seq_id for record in read_fasta(fasta_path)]
             uc_path.write_text(

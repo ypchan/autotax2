@@ -18,8 +18,8 @@ dist/
 .ruff_cache/
 
 .pytest_tmp/
+.pytest_deps/
 pytest-tmp/
 pytest-cache-files-*/
 
 autotax2_build/
-

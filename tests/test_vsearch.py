@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from autotax2.io import read_fasta
 from autotax2.vsearch import (
     build_current_representatives,
     build_cluster_fast_command,
@@ -37,7 +38,7 @@ def test_cluster_fast_command_includes_iddef_2() -> None:
         input_fasta="in.fa",
         uc_path="out.uc",
         centroids_path="centroids.fa",
-        identity=0.987,
+        identity=0.972,
         threads=16,
         vsearch_bin="vsearch",
         iddef=2,
@@ -54,7 +55,7 @@ def test_usearch_global_command_includes_search_controls() -> None:
         query_fasta="query.fa",
         db_fasta="db.fa",
         userout_path="hits.tsv",
-        identity=0.750,
+        identity=0.696,
         maxaccepts=50,
         maxrejects=256,
         strand="both",
@@ -86,7 +87,7 @@ def test_uc_parser_identifies_centroid_and_hit_records(vsearch_tmp_dir: Path) ->
     )
 
     records = parse_uc_records(uc_path)
-    memberships = cluster_memberships_from_uc(uc_path, "species_0.987")
+    memberships = cluster_memberships_from_uc(uc_path, "species_0.972")
 
     assert records[0].record_type == "S"
     assert records[1].record_type == "H"
@@ -121,7 +122,7 @@ def test_registry_hit_filter_keeps_multiple_passing_hits(vsearch_tmp_dir: Path) 
 
     filtered = filter_registry_hits(
         parse_registry_hits(hits_path),
-        floor_id=0.750,
+        floor_id=0.696,
         min_query_cov=0.80,
         min_target_cov=0.0,
     )
@@ -151,9 +152,9 @@ def test_cluster_search_writes_outputs_and_summary(
     tool_rows = _read_tsv(dataset_dir / "tool_versions.tsv")
 
     assert summary.registry_hits_filtered == 2
-    assert (cluster_dir / "species_0.987.uc").exists()
-    assert (cluster_dir / "species_0.987.centroids.fa").exists()
-    assert (cluster_dir / "species_0.987.members.tsv").exists()
+    assert (cluster_dir / "species_0.972.uc").exists()
+    assert (cluster_dir / "species_0.972.centroids.fa").exists()
+    assert (cluster_dir / "species_0.972.members.tsv").exists()
     assert [row["target"] for row in filtered_rows] == ["REF1", "REF2"]
     assert "\t" in filtered_content
     assert "\n" in filtered_content
@@ -163,6 +164,7 @@ def test_cluster_search_writes_outputs_and_summary(
     assert summary_rows[0]["prefix"] == "D20"
     assert summary_rows[0]["input_sequences"] == "2"
     assert summary_rows[0]["species_centroids"] == "1"
+    assert summary_rows[0]["phylum_centroids"] == "1"
     assert summary_rows[0]["registry_representatives"] == "2"
     assert summary_rows[0]["registry_hits_raw"] == "3"
     assert summary_rows[0]["registry_hits_filtered"] == "2"
@@ -170,6 +172,68 @@ def test_cluster_search_writes_outputs_and_summary(
     assert tool_rows[0]["tool"] == "vsearch"
     assert "--iddef 2" in tool_rows[0]["command"]
     assert "--maxaccepts 50" in tool_rows[0]["command"]
+
+
+def test_cluster_search_uses_sina_candidate_subset(
+    vsearch_tmp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build = _make_cluster_search_build(vsearch_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    _write_tsv(
+        dataset_dir / "sina.candidates.tsv",
+        [{"query": "D20_000001", "target": "REF2", "sina_score": "0.98", "source_field": "nearest_slv", "rank": "1"}],
+        ["query", "target", "sina_score", "source_field", "rank"],
+    )
+    _mock_vsearch_run_for_sina_subset(monkeypatch)
+
+    cluster_search_dataset(build=build, dataset="digester2020", vsearch_bin="vsearch")
+
+    subset_records = read_fasta(build / "registry" / "current_representatives.sina_candidates.fa")
+    filtered_rows = _read_tsv(dataset_dir / "vs_registry.filtered.tsv")
+    summary = _read_tsv(dataset_dir / "cluster_search_summary.tsv")[0]
+    diagnostics = _read_tsv(dataset_dir / "sina_candidate_diagnostics.tsv")
+    diagnostics_by_query = {row["query"]: row for row in diagnostics}
+
+    assert [record.seq_id for record in subset_records] == ["REF2"]
+    assert [row["target"] for row in filtered_rows] == ["REF2"]
+    assert summary["sina_candidate_queries"] == "1"
+    assert summary["sina_candidate_targets"] == "1"
+    assert summary["sina_candidate_target_matches"] == "1"
+    assert diagnostics_by_query["D20_000001"]["species_centroid"] == "D20_000001"
+    assert diagnostics_by_query["D20_000001"]["is_species_centroid"] == "true"
+    assert diagnostics_by_query["D20_000001"]["decision"] == "candidate_targets_matched"
+    assert diagnostics_by_query["D20_000001"]["matched_current_representatives"] == "REF2"
+    assert diagnostics_by_query["D20_000002"]["species_centroid"] == "D20_000001"
+    assert diagnostics_by_query["D20_000002"]["is_species_centroid"] == "false"
+    assert diagnostics_by_query["D20_000002"]["decision"] == "no_sina_candidate"
+
+
+def test_cluster_search_can_require_sina_candidate_matches(
+    vsearch_tmp_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build = _make_cluster_search_build(vsearch_tmp_dir)
+    dataset_dir = build / "datasets" / "01_digester2020"
+    _mock_vsearch_run(monkeypatch)
+    _write_tsv(
+        dataset_dir / "sina.candidates.tsv",
+        [{"query": "D20_000001", "target": "MISSING_REF", "sina_score": "0.98", "source_field": "nearest_slv", "rank": "1"}],
+        ["query", "target", "sina_score", "source_field", "rank"],
+    )
+
+    with pytest.raises(RuntimeError, match="No SINA candidate targets matched"):
+        cluster_search_dataset(
+            build=build,
+            dataset="digester2020",
+            vsearch_bin="vsearch",
+            require_sina_candidates=True,
+        )
+    diagnostics = _read_tsv(dataset_dir / "sina_candidate_diagnostics.tsv")
+    diagnostics_by_query = {row["query"]: row for row in diagnostics}
+
+    assert diagnostics_by_query["D20_000001"]["search_mode"] == "no_matching_candidates_fatal"
+    assert diagnostics_by_query["D20_000001"]["decision"] == "unmatched_candidate_fatal"
 
 
 def test_build_current_representatives_rebuilds_existing_cache(vsearch_tmp_dir: Path) -> None:
@@ -191,6 +255,49 @@ def test_build_current_representatives_rebuilds_existing_cache(vsearch_tmp_dir: 
     assert count == 1
     assert ">REF_NEW" in content
     assert ">OLD" not in content
+
+
+def test_build_current_representatives_includes_named_silva_species_evidence(
+    vsearch_tmp_dir: Path,
+) -> None:
+    build = vsearch_tmp_dir / "build"
+    registry = build / "registry"
+    silva = build / "silva"
+    registry.mkdir(parents=True)
+    silva.mkdir(parents=True)
+    (silva / "silva_named_backbone.fa").write_text(
+        ">ECOLI_TYPE d__Bacteria;p__Pseudomonadota;c__Gammaproteobacteria;o__Enterobacterales;f__Enterobacteriaceae;g__Escherichia;s__Escherichia coli\n"
+        "ACGTACGT\n"
+        ">ECOLI_STRAIN d__Bacteria;p__Pseudomonadota;c__Gammaproteobacteria;o__Enterobacterales;f__Enterobacteriaceae;g__Escherichia;s__Escherichia coli\n"
+        "ACGTACGA\n",
+        encoding="utf-8",
+    )
+    _write_tsv(
+        registry / "taxon_nodes.tsv",
+        [{"taxon_id": "S_ECOLI", "rank": "species", "name": "s__Escherichia coli", "parent_taxon_id": ""}],
+        ["taxon_id", "rank", "name", "parent_taxon_id"],
+    )
+    _write_tsv(
+        registry / "representative_registry.tsv",
+        [{"representative_seq_id": "ECOLI_TYPE", "taxon_id": "S_ECOLI", "status": "active", "source_category": "named_silva"}],
+        ["representative_seq_id", "taxon_id", "status", "source_category"],
+    )
+    _write_tsv(
+        registry / "sequence_registry.tsv",
+        [
+            {"seq_id": "ECOLI_TYPE", "taxon_id": "S_ECOLI", "is_silva_named": "true"},
+            {"seq_id": "ECOLI_STRAIN", "taxon_id": "S_ECOLI", "is_silva_named": "true"},
+        ],
+        ["seq_id", "taxon_id", "is_silva_named"],
+    )
+
+    count = build_current_representatives(build)
+    search_ids = [record.seq_id for record in read_fasta(registry / "current_representatives.fa")]
+    tax_rows = _read_tsv(registry / "current_representatives.tax.tsv")
+
+    assert count == 2
+    assert search_ids == ["ECOLI_TYPE", "ECOLI_STRAIN"]
+    assert {row["source"] for row in tax_rows} == {"named_silva", "named_silva_species_evidence"}
 
 
 def _make_cluster_search_build(tmp_dir: Path) -> Path:
@@ -245,6 +352,48 @@ def _mock_vsearch_run(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("autotax2.vsearch.subprocess.run", fake_run)
 
 
+def _mock_vsearch_run_for_sina_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(command, *args, **kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="vsearch v2.29.3\n", stderr="")
+        if "--cluster_fast" in command:
+            uc_path = Path(command[command.index("--uc") + 1])
+            centroids_path = Path(command[command.index("--centroids") + 1])
+            uc_path.write_text(
+                "S\t0\t100\t*\t*\t*\t*\t*\tD20_000001\t*\n"
+                "H\t0\t100\t99.2\t+\t0\t0\t100M\tD20_000002\tD20_000001\n",
+                encoding="utf-8",
+            )
+            centroids_path.write_text(">D20_000001\nACGTACGTACGT\n", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if "--usearch_global" in command:
+            db_path = Path(command[command.index("--db") + 1])
+            assert db_path.name == "current_representatives.sina_candidates.fa"
+            assert [record.seq_id for record in read_fasta(db_path)] == ["REF2"]
+            userout_path = Path(command[command.index("--userout") + 1])
+            userout_path.write_text(
+                "D20_000001\tREF2\t98.2\t90\t1\t90\t1\t90\t100\t120\t41\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(f"Unexpected command: {command}")
+
+    monkeypatch.setattr("autotax2.vsearch.subprocess.run", fake_run)
+
+
 def _read_tsv(path: Path) -> list[dict[str, str]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle, delimiter=chr(9)))
+
+
+def _write_tsv(path: Path, rows: list[dict[str, str]], fieldnames: list[str]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=fieldnames,
+            delimiter=chr(9),
+            lineterminator=chr(10),
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
