@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="620" viewBox="0 0 1180 620" role="img" aria-labelledby="title desc">
+  <title id="title">Confidence scoring model</title>
+  <desc id="desc">Confidence is assigned from unique supporting subjects and unique taxa at the selected rank, defaulting to genus-level support.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="126%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 28px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 12; filter: url(#shadow); }
+      .input { fill: #eff6ff; stroke: #93c5fd; }
+      .calc { fill: #ecfdf5; stroke: #86efac; }
+      .high { fill: #dcfce7; stroke: #22c55e; }
+      .med { fill: #fef9c3; stroke: #eab308; }
+      .low { fill: #ffedd5; stroke: #fb923c; }
+      .none { fill: #fee2e2; stroke: #f87171; }
+      .text { font: 700 16px Arial, sans-serif; fill: #1e293b; }
+      .small { font: 400 13px Arial, sans-serif; fill: #475569; }
+      .formula { font: 700 14px Consolas, monospace; fill: #334155; }
+      .arrow { stroke: #334155; stroke-width: 2.2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="620"/>
+  <text class="title" x="52" y="58">Confidence scoring</text>
+  <text class="subtitle" x="52" y="86">Confidence is evidence tiering, not a statistical probability.</text>
+
+  <rect class="box input" x="70" y="150" width="285" height="135"/>
+  <text class="text" x="108" y="186">Best support cluster</text>
+  <text class="small" x="108" y="214">clustered candidate breakpoints</text>
+  <text class="small" x="108" y="236">one best HSP pair per subject</text>
+  <text class="small" x="108" y="258">selected by support and pair score</text>
+
+  <rect class="box calc" x="445" y="130" width="305" height="175"/>
+  <text class="text" x="483" y="166">Support counts</text>
+  <text class="formula" x="483" y="198">support_subjects</text>
+  <text class="small" x="483" y="220">= unique subject IDs</text>
+  <text class="formula" x="483" y="252">support_taxa</text>
+  <text class="small" x="483" y="274">= unique taxa at --tax-rank</text>
+  <text class="small" x="483" y="294">default rank: genus</text>
+
+  <rect class="box high" x="840" y="95" width="260" height="96"/>
+  <text class="text" x="878" y="130">HIGH</text>
+  <text class="formula" x="878" y="158">subjects &gt;= 10</text>
+  <text class="formula" x="878" y="178">taxa &gt;= 3</text>
+
+  <rect class="box med" x="840" y="225" width="260" height="96"/>
+  <text class="text" x="878" y="260">MEDIUM</text>
+  <text class="formula" x="878" y="288">subjects &gt;= 3</text>
+  <text class="formula" x="878" y="308">taxa &gt;= 3</text>
+
+  <rect class="box low" x="840" y="355" width="260" height="84"/>
+  <text class="text" x="878" y="390">LOW</text>
+  <text class="formula" x="878" y="418">subjects &gt;= 1</text>
+
+  <rect class="box none" x="840" y="475" width="260" height="72"/>
+  <text class="text" x="878" y="510">NONE</text>
+  <text class="small" x="878" y="532">no supported HSP-gap cluster</text>
+
+  <path class="arrow" d="M355 218 H445"/>
+  <path class="arrow" d="M750 218 C805 190, 815 150, 840 143"/>
+  <path class="arrow" d="M750 218 C810 230, 815 260, 840 273"/>
+  <path class="arrow" d="M750 242 C810 310, 815 375, 840 397"/>
+  <path class="arrow" d="M750 266 C812 368, 815 488, 840 511"/>
+</svg>

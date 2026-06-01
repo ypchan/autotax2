@@ -1,37 +1,55 @@
 [build-system]
-requires = ["hatchling>=1.18"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "autotax2"
 version = "0.1.0"
-description = "Fixed-backbone, rank-aware, incremental rRNA gene reference builder."
+description = "GTDB-anchored incremental SSU taxonomy construction with SINA and vsearch"
 readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "MIT" }
+requires-python = ">=3.9"
+license = {text = "MIT"}
 authors = [
-  { name = "autotax2 contributors" }
+  {name = "Yanpeng Chen", email = "764022822@qq.com"}
+]
+keywords = ["16S", "SSU", "taxonomy", "GTDB", "SINA", "vsearch", "bioinformatics"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics"
 ]
 dependencies = [
   "typer>=0.12",
   "rich>=13.0",
-  "PyYAML>=6.0"
+  "pydantic>=2.0",
+  "pyyaml>=6.0",
+  "pandas>=2.0",
+  "biopython>=1.81"
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0"
+  "pytest>=7.0",
+  "ruff>=0.5",
+  "build>=1.0",
+  "twine>=5.0"
 ]
 
 [project.scripts]
-autotax2 = "autotax2.cli:main"
+autotax2 = "autotax2.cli:app"
 
-[tool.hatch.build.targets.wheel]
-packages = ["autotax2"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["autotax2*"]
+
+[tool.ruff]
+line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -p no:cacheprovider"
-markers = [
-  "integration: optional tests requiring real SINA, VSEARCH, and user-provided input files"
-]

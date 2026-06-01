@@ -1,66 +1,20 @@
-from __future__ import annotations
-
-import pytest
-
-from autotax2.taxonomy import (
-    Rank,
-    Taxon,
-    parse_taxon_label,
-    parse_taxonomy_path,
-    rank_prefix,
-    split_taxonomy_path,
-)
+from autotax2.taxonomy import infer_anchor_rank, make_placeholder, parse_tax_string
 
 
-def test_taxon_prefixed_name() -> None:
-    assert Taxon(Rank.GENUS, "Example").prefixed_name == "g__Example"
+def test_parse_tax_string():
+    tax = parse_tax_string("d__Bacteria;p__P;c__C;o__O;f__F;g__G;s__S;")
+    assert tax["domain"] == "d__Bacteria"
+    assert tax["genus"] == "g__G"
 
 
-def test_split_taxonomy_path_ignores_empty_parts() -> None:
-    assert split_taxonomy_path("d__Bacteria; p__Firmicutes; ; g__Example") == [
-        "d__Bacteria",
-        "p__Firmicutes",
-        "g__Example",
-    ]
+def test_infer_anchor_rank():
+    tax = parse_tax_string("d__Bacteria;p__P;c__C;o__O;f__F;g__G;s__S;")
+    thresholds = {"species": 97.2, "genus": 90.1, "family": 80.1, "order": 72.9, "class": 72.2, "phylum": 69.6}
+    assert infer_anchor_rank(98.0, tax, thresholds) == "species"
+    assert infer_anchor_rank(88.0, tax, thresholds) == "family"
+    assert infer_anchor_rank(60.0, tax, thresholds) is None
 
 
-def test_rank_prefix_requires_prefixed_label() -> None:
-    with pytest.raises(ValueError):
-        rank_prefix("Bacteria")
-
-
-def test_parse_taxon_label() -> None:
-    taxon = parse_taxon_label(" g__Example ")
-
-    assert taxon.rank is Rank.GENUS
-    assert taxon.name == "Example"
-    assert taxon.prefixed_name == "g__Example"
-
-
-def test_parse_taxonomy_path_is_rank_aware() -> None:
-    path = parse_taxonomy_path(
-        "d__Bacteria;p__Firmicutes;c__Bacilli;o__Lactobacillales;f__Exampleaceae;"
-        "g__Example;s__Example species;"
-    )
-
-    assert path.labels == (
-        "d__Bacteria",
-        "p__Firmicutes",
-        "c__Bacilli",
-        "o__Lactobacillales",
-        "f__Exampleaceae",
-        "g__Example",
-        "s__Example species",
-    )
-    assert path.require(Rank.GENUS).name == "Example"
-    assert path.to_semicolon_string(trailing_semicolon=True).endswith(";")
-
-
-def test_parse_taxonomy_path_rejects_duplicate_ranks() -> None:
-    with pytest.raises(ValueError):
-        parse_taxonomy_path("d__Bacteria;g__One;g__Two")
-
-
-def test_parse_taxonomy_path_rejects_out_of_order_ranks_by_default() -> None:
-    with pytest.raises(ValueError):
-        parse_taxonomy_path("g__Example;f__Exampleaceae")
+def test_placeholder():
+    assert make_placeholder("species", "midas", 101) == "s__midas_s000101"
+    assert make_placeholder("genus", "mfd", 2) == "g__mfd_g000002"

@@ -187,20 +187,10 @@ echo "[autotax2 integration] init"
   --gtdb-ar53-taxonomy "$GTDB_AR53_TAXONOMY" \
   --gtdb-bac120-taxonomy "$GTDB_BAC120_TAXONOMY" \
   --outdir "$OUTDIR" \
-  --threads "$THREADS"
-
-echo "[autotax2 integration] validate after init"
-"$AUTOTAX2_CMD" validate \
-  --build "$OUTDIR" \
-  --no-check-exports
-
-echo "[autotax2 integration] resolve"
-"$AUTOTAX2_CMD" resolve \
-  --build "$OUTDIR" \
   --threads "$THREADS" \
   --vsearch-bin "$VSEARCH_BIN"
 
-echo "[autotax2 integration] validate after resolve"
+echo "[autotax2 integration] validate after SILVA setup"
 "$AUTOTAX2_CMD" validate \
   --build "$OUTDIR" \
   --no-check-exports
@@ -213,44 +203,34 @@ echo "[autotax2 integration] prepare"
   --fasta "$DATASET_FASTA" \
   --domain "$DOMAIN"
 
-ORIENT_ARGS=(
-  orient
-  --build "$OUTDIR"
-  --dataset "$DATASET_NAME"
-  --threads "$THREADS"
-  --sina-bin "$SINA_BIN"
-)
-if [[ -n "$SINA_REFERENCE" ]]; then
-  ORIENT_ARGS+=(--reference "$SINA_REFERENCE")
-fi
-if [[ "$SEARCH_CANDIDATES" == "1" ]]; then
-  ORIENT_ARGS+=(
-    --search-candidates
-    --search-min-sim "$SEARCH_MIN_SIM"
-    --search-max-result "$SEARCH_MAX_RESULT"
-  )
-  if [[ -n "$SINA_SEARCH_DB" ]]; then
-    ORIENT_ARGS+=(--search-db "$SINA_SEARCH_DB")
-  fi
-else
-  ORIENT_ARGS+=(--no-search-candidates)
-fi
-
-echo "[autotax2 integration] orient"
-"$AUTOTAX2_CMD" "${ORIENT_ARGS[@]}"
-
 CLUSTER_ARGS=(
   cluster
   --build "$OUTDIR"
   --dataset "$DATASET_NAME"
   --threads "$THREADS"
   --vsearch-bin "$VSEARCH_BIN"
+  --sina-bin "$SINA_BIN"
 )
+if [[ -n "$SINA_REFERENCE" ]]; then
+  CLUSTER_ARGS+=(--sina-reference "$SINA_REFERENCE")
+fi
+if [[ "$SEARCH_CANDIDATES" == "1" ]]; then
+  CLUSTER_ARGS+=(
+    --search-candidates
+    --search-min-sim "$SEARCH_MIN_SIM"
+    --search-max-result "$SEARCH_MAX_RESULT"
+  )
+  if [[ -n "$SINA_SEARCH_DB" ]]; then
+    CLUSTER_ARGS+=(--search-db "$SINA_SEARCH_DB")
+  fi
+else
+  CLUSTER_ARGS+=(--no-search-candidates)
+fi
 if [[ "$REQUIRE_SINA_CANDIDATES" == "1" ]]; then
   CLUSTER_ARGS+=(--require-sina-candidates)
 fi
 
-echo "[autotax2 integration] cluster"
+echo "[autotax2 integration] cluster with automatic orientation"
 "$AUTOTAX2_CMD" "${CLUSTER_ARGS[@]}"
 
 echo "[autotax2 integration] place"
@@ -294,6 +274,8 @@ EXPORT_VALIDATION="$OUTDIR/export/export_validation.tsv"
 SILVA_EVIDENCE="$OUTDIR/silva/silva_unresolved_evidence.tsv"
 PLACEMENT_EVIDENCE="$DATASET_DIR/placement_evidence.tsv"
 CLUSTER_SUMMARY="$DATASET_DIR/cluster_search_summary.tsv"
+SINA_ORIENTED="$DATASET_DIR/sina.oriented.fa"
+SINA_SUMMARY="$DATASET_DIR/sina.summary.tsv"
 
 echo "[autotax2 integration] post-run file checks"
 for path in \
@@ -308,7 +290,9 @@ for path in \
   "$EXPORT_VALIDATION" \
   "$SILVA_EVIDENCE" \
   "$PLACEMENT_EVIDENCE" \
-  "$CLUSTER_SUMMARY"; do
+  "$CLUSTER_SUMMARY" \
+  "$SINA_ORIENTED" \
+  "$SINA_SUMMARY"; do
   require_nonempty "$path"
 done
 

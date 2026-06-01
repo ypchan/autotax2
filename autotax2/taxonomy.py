@@ -1,130 +1,99 @@
-"""Taxonomy primitives for rank-aware reference building."""
-
+"""Taxonomy parsing and placeholder helpers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from typing import Dict, Optional
+
+from .config import RANK_PREFIX, RANKS_COARSE_TO_FINE, RANKS_FINE_TO_COARSE
 
 
-class Rank(str, Enum):
-    """Supported taxonomic ranks."""
-
-    DOMAIN = "d"
-    PHYLUM = "p"
-    CLASS = "c"
-    ORDER = "o"
-    FAMILY = "f"
-    GENUS = "g"
-    SPECIES = "s"
+@dataclass
+class AnchorCall:
+    seq_id: str
+    anchor_rank: str | None
+    anchor_taxonomy: Dict[str, str | None]
+    align_ident: float | None
+    align_quality: float | None
+    reason: str = ""
 
 
-RANK_ORDER = (
-    Rank.DOMAIN,
-    Rank.PHYLUM,
-    Rank.CLASS,
-    Rank.ORDER,
-    Rank.FAMILY,
-    Rank.GENUS,
-    Rank.SPECIES,
-)
-RANK_INDEX = {rank: index for index, rank in enumerate(RANK_ORDER)}
+def normalize_taxon(rank: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if not value or value.lower() in {"na", "nan", "none", "unclassified", "unclassified;"}:
+        return None
+    prefix = RANK_PREFIX.get(rank)
+    if prefix and not value.startswith(f"{prefix}__"):
+        if ":" in value:
+            value = value.split(":", 1)[1]
+        value = f"{prefix}__{value}"
+    return value.rstrip(";")
 
 
-@dataclass(frozen=True)
-class Taxon:
-    """A taxon label at a specific rank."""
+def parse_tax_string(tax: str | None) -> Dict[str, str | None]:
+    """Parse semicolon taxonomy into rank dictionary.
 
-    rank: Rank | str
-    name: str
-
-    def __post_init__(self) -> None:
-        rank = Rank(self.rank)
-        name = self.name.strip()
-        if not name:
-            raise ValueError("Taxon name must not be empty.")
-        object.__setattr__(self, "rank", rank)
-        object.__setattr__(self, "name", name)
-
-    @property
-    def prefixed_name(self) -> str:
-        """Return a rank-prefixed taxonomy label."""
-        return f"{self.rank.value}__{self.name}"
-
-
-@dataclass(frozen=True)
-class TaxonomyPath:
-    """A parsed, rank-aware taxonomy path."""
-
-    taxa: tuple[Taxon, ...]
-
-    @property
-    def labels(self) -> tuple[str, ...]:
-        """Return rank-prefixed labels in path order."""
-        return tuple(taxon.prefixed_name for taxon in self.taxa)
-
-    def by_rank(self) -> dict[Rank, Taxon]:
-        """Return taxa keyed by rank."""
-        return {taxon.rank: taxon for taxon in self.taxa}
-
-    def get(self, rank: Rank | str) -> Taxon | None:
-        """Return a taxon by rank if present."""
-        return self.by_rank().get(Rank(rank))
-
-    def require(self, rank: Rank | str) -> Taxon:
-        """Return a taxon by rank or raise an error."""
-        parsed_rank = Rank(rank)
-        taxon = self.get(parsed_rank)
-        if taxon is None:
-            raise KeyError(f"Taxonomy path lacks rank: {parsed_rank.value}")
-        return taxon
-
-    def to_semicolon_string(self, trailing_semicolon: bool = False) -> str:
-        """Render the taxonomy path as a semicolon-delimited string."""
-        rendered = ";".join(self.labels)
-        if trailing_semicolon and rendered:
-            return f"{rendered};"
-        return rendered
+    Accepts GTDB/SILVA-like strings such as:
+    d__Bacteria;p__Pseudomonadota;c__Gammaproteobacteria;...
+    """
+    result: Dict[str, str | None] = {rank: None for rank in ["domain"] + RANKS_COARSE_TO_FINE}
+    if tax is None:
+        return result
+    tax = tax.strip().strip(";")
+    if not tax or tax.lower() == "unclassified":
+        return result
+    parts = [p.strip() for p in tax.split(";") if p.strip()]
+    prefix_to_rank = {v: k for k, v in RANK_PREFIX.items()}
+    for part in parts:
+        if "__" in part:
+            pref = part.split("__", 1)[0]
+            rank = prefix_to_rank.get(pref)
+            if rank:
+                result[rank] = normalize_taxon(rank, part)
+        elif ":" in part:
+            pref, name = part.split(":", 1)
+            rank = prefix_to_rank.get(pref)
+            if rank:
+                result[rank] = normalize_taxon(rank, name)
+    return result
 
 
-def split_taxonomy_path(path: str) -> list[str]:
-    """Split a semicolon-delimited taxonomy string into non-empty labels."""
-    return [part.strip() for part in path.split(";") if part.strip()]
+def taxonomy_to_string(tax: Dict[str, str | None], include_domain: bool = True) -> str:
+    ranks = (["domain"] if include_domain else []) + RANKS_COARSE_TO_FINE
+    return ";".join(tax.get(rank) or "" for rank in ranks)
 
 
-def rank_prefix(label: str) -> str:
-    """Return the rank prefix from a taxonomy label."""
-    return parse_taxon_label(label).rank.value
+def infer_anchor_rank(
+    align_ident_percent: float | None,
+    lca_tax: Dict[str, str | None],
+    thresholds_percent: Dict[str, float],
+) -> str | None:
+    """Return the finest trusted anchor rank based on SINA identity and LCA taxonomy."""
+    if align_ident_percent is None:
+        return None
+    for rank in RANKS_FINE_TO_COARSE:
+        if align_ident_percent >= thresholds_percent[rank] and lca_tax.get(rank):
+            return rank
+    return None
 
 
-def parse_taxon_label(label: str) -> Taxon:
-    """Parse a single rank-prefixed taxonomy label."""
-    normalized = label.strip()
-    if "__" not in normalized:
-        raise ValueError(f"Taxonomy label lacks rank prefix: {label}")
-
-    prefix, name = normalized.split("__", maxsplit=1)
-    try:
-        rank = Rank(prefix)
-    except ValueError as exc:
-        raise ValueError(f"Unsupported taxonomy rank prefix: {prefix}") from exc
-
-    return Taxon(rank=rank, name=name)
+def inherited_ranks(anchor_rank: str | None) -> list[str]:
+    """Ranks inherited from backbone for an anchor rank."""
+    if anchor_rank is None:
+        return []
+    idx = RANKS_COARSE_TO_FINE.index(anchor_rank)
+    return RANKS_COARSE_TO_FINE[: idx + 1]
 
 
-def parse_taxonomy_path(path: str, strict_order: bool = True) -> TaxonomyPath:
-    """Parse a semicolon-delimited taxonomy path into rank-aware taxa."""
-    taxa = tuple(parse_taxon_label(label) for label in split_taxonomy_path(path))
-    seen: set[Rank] = set()
-    previous_index = -1
+def novel_ranks_below_anchor(anchor_rank: str | None) -> list[str]:
+    """Ranks that need novel clustering/placeholder construction."""
+    if anchor_rank is None:
+        return RANKS_COARSE_TO_FINE.copy()
+    idx = RANKS_COARSE_TO_FINE.index(anchor_rank)
+    return RANKS_COARSE_TO_FINE[idx + 1 :]
 
-    for taxon in taxa:
-        if taxon.rank in seen:
-            raise ValueError(f"Duplicate taxonomy rank: {taxon.rank.value}")
-        seen.add(taxon.rank)
 
-        index = RANK_INDEX[taxon.rank]
-        if strict_order and index <= previous_index:
-            raise ValueError("Taxonomy ranks are out of canonical order.")
-        previous_index = index
-
-    return TaxonomyPath(taxa=taxa)
+def make_placeholder(rank: str, prefix: str, number: int, digits: int = 6) -> str:
+    letter = RANK_PREFIX[rank]
+    return f"{letter}__{prefix}_{letter}{number:0{digits}d}"

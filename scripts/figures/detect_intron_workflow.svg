@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="760" viewBox="0 0 1180 760" role="img" aria-labelledby="title desc">
+  <title id="title">Overall BLASTN intron detection workflow</title>
+  <desc id="desc">Workflow from query and reference input through optional reference intron cleaning, BLAST, HSP filtering, support clustering, confidence assignment, and output files.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="126%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 28px Arial, "Microsoft YaHei", sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px Arial, "Microsoft YaHei", sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 12; filter: url(#shadow); }
+      .input { fill: #eff6ff; stroke: #93c5fd; }
+      .ref { fill: #ecfdf5; stroke: #86efac; }
+      .clean { fill: #fff7ed; stroke: #fdba74; }
+      .output { fill: #f5f3ff; stroke: #c4b5fd; }
+      .text { font: 700 16px Arial, "Microsoft YaHei", sans-serif; fill: #1e293b; }
+      .small { font: 400 13px Arial, "Microsoft YaHei", sans-serif; fill: #475569; }
+      .arrow { stroke: #334155; stroke-width: 2.2; marker-end: url(#arrow); fill: none; }
+      .muted { stroke: #94a3b8; stroke-width: 2; marker-end: url(#arrow); fill: none; stroke-dasharray: 7 7; }
+      .tag { font: 700 12px Arial, "Microsoft YaHei", sans-serif; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="760"/>
+  <text class="title" x="50" y="58">Overall workflow</text>
+  <text class="subtitle" x="50" y="86">Reference self-cleaning is optional, but recommended when the reference set may contain rare intron-bearing sequences.</text>
+
+  <rect class="box input" x="70" y="130" width="210" height="76"/>
+  <text class="text" x="100" y="162">Query FASTA</text>
+  <text class="small" x="100" y="186">read query sequences</text>
+
+  <rect class="box input" x="70" y="272" width="210" height="92"/>
+  <text class="text" x="100" y="305">Reference input</text>
+  <text class="small" x="100" y="329">--blast / --db / --ref-fasta</text>
+  <text class="small" x="100" y="349">exactly one mode</text>
+
+  <rect class="box ref" x="340" y="246" width="220" height="118"/>
+  <text class="text" x="374" y="284">Prepare reference</text>
+  <text class="small" x="374" y="309">parse taxonomy</text>
+  <text class="small" x="374" y="329">filter domain/species/ATGC</text>
+  <text class="small" x="374" y="349">make raw BLAST DB</text>
+
+  <rect class="box clean" x="630" y="226" width="230" height="138"/>
+  <text class="text" x="666" y="263">Optional self-clean</text>
+  <text class="small" x="666" y="289">reference self-BLAST</text>
+  <text class="small" x="666" y="309">detect reference introns</text>
+  <text class="small" x="666" y="329">write cleaned_reference.fa</text>
+  <text class="small" x="666" y="349">make cleaned DB</text>
+
+  <rect class="box" x="920" y="246" width="200" height="118"/>
+  <text class="text" x="958" y="284">Run or read BLAST</text>
+  <text class="small" x="958" y="309">query vs reference</text>
+  <text class="small" x="958" y="329">outfmt 6 HSP table</text>
+
+  <rect class="box" x="210" y="455" width="205" height="104"/>
+  <text class="text" x="246" y="489">Filter HSPs</text>
+  <text class="small" x="246" y="514">min identity</text>
+  <text class="small" x="246" y="534">min HSP length</text>
+
+  <rect class="box" x="470" y="455" width="225" height="104"/>
+  <text class="text" x="508" y="489">Find HSP pairs</text>
+  <text class="small" x="508" y="514">top subjects by bitscore</text>
+  <text class="small" x="508" y="534">query gap + near-continuous ref</text>
+
+  <rect class="box" x="750" y="455" width="205" height="104"/>
+  <text class="text" x="784" y="489">Cluster evidence</text>
+  <text class="small" x="784" y="514">breakpoint window</text>
+  <text class="small" x="784" y="534">support taxa/subjects</text>
+
+  <rect class="box output" x="365" y="625" width="450" height="88"/>
+  <text class="text" x="414" y="660">Write final outputs</text>
+  <text class="small" x="414" y="685">summary.tsv, supporting_hsps.tsv, intron_free.fa, introns.fa, BED, report.md</text>
+
+  <path class="arrow" d="M280 318 H340"/>
+  <path class="arrow" d="M560 305 H630"/>
+  <path class="arrow" d="M860 305 H920"/>
+  <path class="muted" d="M280 318 C535 405, 720 405, 920 330"/>
+  <text class="tag" x="443" y="412">--db or --blast skips FASTA self-clean path</text>
+
+  <path class="arrow" d="M1020 364 V407 C1020 438, 990 507, 955 507"/>
+  <path class="arrow" d="M280 168 C550 168, 745 170, 920 270"/>
+  <path class="arrow" d="M415 507 H470"/>
+  <path class="arrow" d="M695 507 H750"/>
+  <path class="arrow" d="M853 559 C835 610, 763 641, 815 669"/>
+  <path class="arrow" d="M312 559 C334 610, 390 641, 365 669"/>
+</svg>

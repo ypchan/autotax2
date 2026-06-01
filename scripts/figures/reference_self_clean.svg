@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="620" viewBox="0 0 1180 620" role="img" aria-labelledby="title desc">
+  <title id="title">Reference self-cleaning workflow</title>
+  <desc id="desc">A reference FASTA is self-BLASTed, intron-like reference records are detected from split-query HSP evidence, candidate introns are removed, and a cleaned BLAST database is built.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#334155"/>
+    </marker>
+    <filter id="shadow" x="-8%" y="-8%" width="116%" height="126%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      .bg { fill: #f8fafc; }
+      .title { font: 700 28px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 12; filter: url(#shadow); }
+      .raw { fill: #ecfeff; stroke: #67e8f9; }
+      .detect { fill: #fff7ed; stroke: #fdba74; }
+      .clean { fill: #ecfdf5; stroke: #86efac; }
+      .audit { fill: #f5f3ff; stroke: #c4b5fd; }
+      .text { font: 700 16px Arial, sans-serif; fill: #1e293b; }
+      .small { font: 400 13px Arial, sans-serif; fill: #475569; }
+      .formula { font: 700 14px Consolas, monospace; fill: #7c2d12; }
+      .arrow { stroke: #334155; stroke-width: 2.2; marker-end: url(#arrow); fill: none; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="620"/>
+  <text class="title" x="52" y="58">Reference self-cleaning</text>
+  <text class="subtitle" x="52" y="86">Used when rare reference records may already contain introns.</text>
+
+  <rect class="box raw" x="70" y="145" width="230" height="112"/>
+  <text class="text" x="110" y="181">Raw reference</text>
+  <text class="small" x="110" y="207">raw_reference.fa</text>
+  <text class="small" x="110" y="227">raw_reference.tax.tsv</text>
+
+  <rect class="box raw" x="370" y="145" width="230" height="112"/>
+  <text class="text" x="410" y="181">Raw BLAST DB</text>
+  <text class="small" x="410" y="207">makeblastdb</text>
+  <text class="small" x="410" y="227">raw_reference_db.*</text>
+
+  <rect class="box detect" x="670" y="125" width="260" height="152"/>
+  <text class="text" x="708" y="161">Reference self-BLAST</text>
+  <text class="small" x="708" y="187">each reference acts as query</text>
+  <text class="small" x="708" y="207">detect split-query HSP pairs</text>
+  <text class="formula" x="708" y="235">query_gap large</text>
+  <text class="formula" x="708" y="255">abs(subject_gap) small</text>
+
+  <rect class="box audit" x="365" y="382" width="270" height="130"/>
+  <text class="text" x="403" y="418">Audit outputs</text>
+  <text class="small" x="403" y="444">reference_self_clean.summary.tsv</text>
+  <text class="small" x="403" y="464">supporting_hsps.tsv</text>
+  <text class="small" x="403" y="484">reference_self_clean.report.md</text>
+
+  <rect class="box clean" x="720" y="382" width="300" height="130"/>
+  <text class="text" x="758" y="418">Cleaned reference DB</text>
+  <text class="small" x="758" y="444">remove candidate intervals</text>
+  <text class="small" x="758" y="464">cleaned_reference.fa</text>
+  <text class="small" x="758" y="484">cleaned_reference_db.*</text>
+
+  <path class="arrow" d="M300 201 H370"/>
+  <path class="arrow" d="M600 201 H670"/>
+  <path class="arrow" d="M800 277 C780 330, 635 354, 575 382"/>
+  <path class="arrow" d="M870 277 C900 326, 894 350, 886 382"/>
+  <path class="arrow" d="M1020 447 C1085 447, 1085 206, 930 206"/>
+  <text class="small" x="960" y="194">final query BLAST uses cleaned DB</text>
+</svg>

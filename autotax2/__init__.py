@@ -1,5 +1,2 @@
-"""autotax2 package."""
-
-from __future__ import annotations
-
+"""AutoTax2 package."""
 __version__ = "0.1.0"
