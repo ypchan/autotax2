@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import logging
 
 import typer
 from rich.console import Console
@@ -59,14 +58,6 @@ def init(
 
     Optional:
       --threads, --force, --debug
-
-    Example:
-      autotax2 init \
-        --ref-fa gtdb_ssu_tax.fa \
-        --ref-tax gtdb_ssu.taxonomy.tsv \
-        --ref-arb gtdb_ssu.arb \
-        --db autotax2_db \
-        --threads 64
     """
     setup_logging(log_file=db / "logs" / "init.log", debug=debug)
     init_db(ref_fa=ref_fa, ref_tax=ref_tax, ref_arb=ref_arb, db=db, threads=threads, force=force)
@@ -80,6 +71,14 @@ def add(
     source: str = typer.Option(..., "--source", help="Required. Source name, e.g. midas."),
     prefix: str = typer.Option(..., "--prefix", help="Required. Placeholder prefix for new lineages."),
     threads: int = typer.Option(1, "--threads", "-t", help="Optional. CPU threads."),
+    group_jobs: int | None = typer.Option(
+        None,
+        "--group-jobs",
+        help=(
+            "Optional. Independent anchor groups to cluster concurrently. "
+            "Default: auto from --threads."
+        ),
+    ),
     mode: str = typer.Option(
         "incremental", "--mode", help="Optional. incremental or full. Default: incremental."
     ),
@@ -93,16 +92,7 @@ def add(
       --db, --input, --source, --prefix
 
     Optional:
-      --threads, --mode, --keep-temp, --dry-run, --debug
-
-    Example:
-      autotax2 add \
-        --db autotax2_db \
-        --input MiDAS5.3.ssu.fa \
-        --source midas \
-        --prefix midas \
-        --threads 64 \
-        --mode incremental
+      --threads, --group-jobs, --mode, --keep-temp, --dry-run, --debug
     """
     setup_logging(log_file=db / "logs" / f"add_{source}.log", debug=debug)
     add_sequences(
@@ -111,6 +101,7 @@ def add(
         source=source,
         prefix=prefix,
         threads=threads,
+        group_jobs=group_jobs,
         mode=mode,
         keep_temp=keep_temp,
         dry_run=dry_run,
@@ -126,11 +117,7 @@ def rebuild(
     dry_run: bool = typer.Option(False, "--dry-run", help="Print commands without running."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug logging."),
 ):
-    """Run a full hierarchical vsearch rebuild.
-
-    Example:
-      autotax2 rebuild --db autotax2_db --threads 128
-    """
+    """Run a full hierarchical vsearch rebuild."""
     setup_logging(log_file=db / "logs" / "rebuild.log", debug=debug)
     rebuild_db(db=db, threads=threads, dry_run=dry_run)
     console.print(f"[green]Rebuild finished for database:[/green] {db}")
@@ -145,17 +132,7 @@ def export_cmd(
     out: Path = typer.Option(..., "--out", help="Required. Output file or directory."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug logging."),
 ):
-    """Export annotation references.
-
-    Required:
-      --db, --format, --out
-
-    Export formats:
-      all, sintax, dada2, qiime2, taxonomy
-
-    Example:
-      autotax2 export --db autotax2_db --format all --out export/
-    """
+    """Export annotation references."""
     setup_logging(log_file=db / "logs" / "export.log", debug=debug)
     export_database(db=db, out=out, fmt=fmt)
     console.print(f"[green]Export finished:[/green] {out}")
@@ -168,11 +145,7 @@ def summarize(
     out: Path | None = typer.Option(None, "--out", help="Optional output TSV."),
     debug: bool = typer.Option(False, "--debug", help="Enable debug logging."),
 ):
-    """Summarize source overlap for a rank.
-
-    Example:
-      autotax2 summarize --db autotax2_db --rank species --out species.summary.tsv
-    """
+    """Summarize source overlap for a rank."""
     setup_logging(log_file=db / "logs" / "summarize.log", debug=debug)
     summary = summarize_sources(db=db, rank=rank, out=out)
     console.print(summary.head(20).to_string(index=False))

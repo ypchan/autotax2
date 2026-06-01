@@ -1,7 +1,9 @@
 """Core AutoTax2 workflows."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -18,7 +20,7 @@ from .registry import (
     save_table,
 )
 from .sina import parse_sina_fasta_to_table, run_sina, strip_sina_alignment
-from .taxonomy import infer_anchor_rank, inherited_ranks, novel_ranks_below_anchor, parse_tax_string
+from .taxonomy import infer_anchor_rank, inherited_ranks, novel_ranks_below_anchor
 from .utils import ensure_dir, require_executable, require_file
 from .vsearch import derep_fulllength, hierarchical_cluster, uc_membership
 
@@ -54,6 +56,7 @@ def add_sequences(
     source: str,
     prefix: str,
     threads: int,
+    group_jobs: int | None = None,
     mode: str = "incremental",
     debug: bool = False,
     keep_temp: bool = False,
@@ -61,9 +64,8 @@ def add_sequences(
 ) -> None:
     """Add new sequences into an AutoTax2 database.
 
-    This is an MVP implementation of the designed workflow:
-    SINA -> parse anchors -> derep -> group by anchor -> local hierarchical clustering ->
-    placeholder assignment -> registry update.
+    SINA anchors the whole dataset, then independent anchor groups are clustered
+    concurrently within the user's total thread budget.
     """
     if mode not in {"incremental", "full"}:
         raise ValueError("mode must be 'incremental' or 'full'")
@@ -113,7 +115,7 @@ def add_sequences(
         logger.info("Dry run: skipping downstream table generation.")
         return
 
-    derep_fa, derep_uc = derep_fulllength(
+    derep_fulllength(
         corrected,
         version_dir / "02_derep" / "new.derep.fa",
         version_dir / "02_derep" / "new.derep.uc",
@@ -123,17 +125,60 @@ def add_sequences(
         dry_run=dry_run,
     )
 
-    # MVP grouping: group by anchor_rank + anchor taxonomy string; cluster all required novel ranks per group.
-    # For production-scale runs, groups can be processed independently in parallel.
+    corrected_records = list(parse_fasta(corrected))
+    seq_registry_new = build_sequence_registry_rows(
+        records=corrected_records,
+        sina_table=sina_table,
+        source=source,
+        version=version,
+    )
+
+    cluster_groups = build_cluster_groups(sina_table)
     cluster_summaries = []
-    seq_registry_new = []
-    seq_lengths = {rec.id: rec.length for rec in parse_fasta(corrected)}
-    for rec in parse_fasta(corrected):
-        row = sina_table[sina_table["seq_id"] == rec.id]
-        if row.empty:
+    if cluster_groups:
+        workers, threads_per_worker = resolve_group_parallelism(
+            group_count=len(cluster_groups), threads=threads, group_jobs=group_jobs
+        )
+        logger.info(
+            "Clustering %d anchor groups with %d worker(s), %d thread(s) per worker",
+            len(cluster_groups),
+            workers,
+            threads_per_worker,
+        )
+        cluster_summaries = run_cluster_groups(
+            groups=cluster_groups,
+            records=corrected_records,
+            version_dir=version_dir,
+            cfg=cfg,
+            threads_per_worker=threads_per_worker,
+            workers=workers,
+            dry_run=dry_run,
+        )
+
+    if seq_registry_new:
+        old = load_table(atdb.sequence_registry_path)
+        seq_new_df = pd.DataFrame(seq_registry_new)
+        save_table(pd.concat([old, seq_new_df], ignore_index=True).fillna(""), atdb.sequence_registry_path)
+
+    if cluster_summaries:
+        save_table(pd.DataFrame(cluster_summaries), version_dir / "cluster_summary.tsv")
+
+    provisional = build_provisional_taxonomy(atdb, sina_table, source, prefix, version)
+    save_table(provisional, version_dir / "provisional_taxonomy.tsv")
+    update_current_taxonomy(atdb, provisional)
+    logger.info("Finished add workflow. Version directory: %s", version_dir)
+
+
+def build_sequence_registry_rows(
+    records: list[FastaRecord], sina_table: pd.DataFrame, source: str, version: str
+) -> list[dict]:
+    rows = []
+    by_seq_id = {row["seq_id"]: row for _, row in sina_table.iterrows()}
+    for rec in records:
+        r = by_seq_id.get(rec.id)
+        if r is None:
             continue
-        r = row.iloc[0]
-        seq_registry_new.append(
+        rows.append(
             {
                 "seq_id": rec.id,
                 "seq_md5": rec.md5,
@@ -147,73 +192,149 @@ def add_sequences(
                 "anchor_rank": r.get("anchor_rank", ""),
             }
         )
+    return rows
 
-    # Create placeholders for novel ranks per sequence cluster group. This MVP clusters each broad group;
-    # later optimization can batch groups and perform inheritance overlap checks.
-    grouped = sina_table.groupby(["anchor_rank", "phylum", "class", "order", "family", "genus", "species"], dropna=False)
+
+def build_cluster_groups(sina_table: pd.DataFrame) -> list[dict]:
+    groups = []
+    grouped = sina_table.groupby(
+        ["anchor_rank", "phylum", "class", "order", "family", "genus", "species"],
+        dropna=False,
+    )
     for group_key, group_df in grouped:
         anchor_rank = group_key[0] or None
         novel_ranks = novel_ranks_below_anchor(anchor_rank)
-        if not novel_ranks:
+        novel_ranks_fine = [
+            r for r in ["species", "genus", "family", "order", "class", "phylum"] if r in novel_ranks
+        ]
+        if not novel_ranks_fine:
             continue
-        group_ids = set(group_df["seq_id"])
-        group_fa = version_dir / "03_clusters" / f"group_{len(cluster_summaries)+1}.fa"
-        records = [rec for rec in parse_fasta(corrected) if rec.id in group_ids]
-        write_fasta(records, group_fa)
-        # Cluster fine-to-coarse novel ranks only: species -> genus -> ... up to rank below anchor.
-        novel_ranks_fine = [r for r in ["species", "genus", "family", "order", "class", "phylum"] if r in novel_ranks]
-        if novel_ranks_fine:
-            res = hierarchical_cluster(
-                group_fa,
-                output_dir=version_dir / "03_clusters" / f"group_{len(cluster_summaries)+1}",
-                ranks=novel_ranks_fine,
-                thresholds_fraction=cfg.get("thresholds_fraction", DEFAULT_THRESHOLDS_FRACTION),
-                threads=threads,
-                iddef=cfg.get("vsearch", {}).get("iddef", 2),
-                vsearch_bin=cfg.get("tools", {}).get("vsearch", "vsearch"),
-                log_file=version_dir / "03_clusters" / "vsearch.cluster.log",
-                dry_run=dry_run,
-            )
-            for cr in res:
-                mem = uc_membership(cr.uc_file, cr.rank)
-                mem_out = version_dir / "03_clusters" / f"group_{len(cluster_summaries)+1}.{cr.rank}.membership.tsv"
-                save_table(mem, mem_out)
-                cluster_summaries.append(
-                    {
-                        "group": str(len(cluster_summaries) + 1),
-                        "anchor_rank": anchor_rank or "",
-                        "rank": cr.rank,
-                        "threshold": cr.threshold,
-                        "uc_file": str(cr.uc_file),
-                        "centroids_fa": str(cr.centroids_fa),
-                        "n_members": len(mem),
-                    }
+        groups.append(
+            {
+                "group_index": len(groups) + 1,
+                "anchor_rank": anchor_rank,
+                "seq_ids": set(group_df["seq_id"]),
+                "novel_ranks_fine": novel_ranks_fine,
+            }
+        )
+    return groups
+
+
+def resolve_group_parallelism(
+    group_count: int, threads: int, group_jobs: int | None = None
+) -> tuple[int, int]:
+    """Choose worker count without exceeding the requested CPU budget."""
+    if group_count <= 0:
+        return 0, 0
+    total_threads = max(1, int(threads or 1))
+    if group_jobs is None:
+        cpu_count = os.cpu_count() or total_threads
+        workers = min(group_count, total_threads, cpu_count)
+    else:
+        workers = min(group_count, total_threads, max(1, int(group_jobs)))
+    threads_per_worker = max(1, total_threads // workers)
+    return workers, threads_per_worker
+
+
+def run_cluster_groups(
+    groups: list[dict],
+    records: list[FastaRecord],
+    version_dir: Path,
+    cfg: dict,
+    threads_per_worker: int,
+    workers: int,
+    dry_run: bool,
+) -> list[dict]:
+    """Cluster independent anchor groups concurrently and return deterministic summaries."""
+    if workers <= 1:
+        summaries = []
+        for group in groups:
+            summaries.extend(
+                cluster_one_group(
+                    group=group,
+                    records=records,
+                    version_dir=version_dir,
+                    cfg=cfg,
+                    threads=threads_per_worker,
+                    dry_run=dry_run,
                 )
+            )
+        return summaries
 
-    if seq_registry_new:
-        old = load_table(atdb.sequence_registry_path)
-        seq_new_df = pd.DataFrame(seq_registry_new)
-        save_table(pd.concat([old, seq_new_df], ignore_index=True).fillna(""), atdb.sequence_registry_path)
+    results: dict[int, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(
+                cluster_one_group,
+                group=group,
+                records=records,
+                version_dir=version_dir,
+                cfg=cfg,
+                threads=threads_per_worker,
+                dry_run=dry_run,
+            ): group["group_index"]
+            for group in groups
+        }
+        for future in as_completed(futures):
+            group_index = futures[future]
+            results[group_index] = future.result()
 
-    if cluster_summaries:
-        save_table(pd.DataFrame(cluster_summaries), version_dir / "cluster_summary.tsv")
+    summaries = []
+    for group_index in sorted(results):
+        summaries.extend(results[group_index])
+    return summaries
 
-    # Write sequence-level provisional taxonomy table using SINA anchor + placeholder allocation per missing rank.
-    provisional = build_provisional_taxonomy(atdb, sina_table, source, prefix, version)
-    save_table(provisional, version_dir / "provisional_taxonomy.tsv")
-    update_current_taxonomy(atdb, provisional)
-    logger.info("Finished add workflow. Version directory: %s", version_dir)
+
+def cluster_one_group(
+    group: dict,
+    records: list[FastaRecord],
+    version_dir: Path,
+    cfg: dict,
+    threads: int,
+    dry_run: bool,
+) -> list[dict]:
+    group_index = int(group["group_index"])
+    group_ids = group["seq_ids"]
+    cluster_dir = version_dir / "03_clusters"
+    group_fa = cluster_dir / f"group_{group_index}.fa"
+    group_records = [rec for rec in records if rec.id in group_ids]
+    write_fasta(group_records, group_fa)
+
+    results = hierarchical_cluster(
+        group_fa,
+        output_dir=cluster_dir / f"group_{group_index}",
+        ranks=group["novel_ranks_fine"],
+        thresholds_fraction=cfg.get("thresholds_fraction", DEFAULT_THRESHOLDS_FRACTION),
+        threads=threads,
+        iddef=cfg.get("vsearch", {}).get("iddef", 2),
+        vsearch_bin=cfg.get("tools", {}).get("vsearch", "vsearch"),
+        log_file=cluster_dir / f"group_{group_index}.vsearch.cluster.log",
+        dry_run=dry_run,
+    )
+
+    summaries = []
+    for cr in results:
+        mem = uc_membership(cr.uc_file, cr.rank)
+        mem_out = cluster_dir / f"group_{group_index}.{cr.rank}.membership.tsv"
+        save_table(mem, mem_out)
+        summaries.append(
+            {
+                "group": str(group_index),
+                "anchor_rank": group["anchor_rank"] or "",
+                "rank": cr.rank,
+                "threshold": cr.threshold,
+                "uc_file": str(cr.uc_file),
+                "centroids_fa": str(cr.centroids_fa),
+                "n_members": len(mem),
+            }
+        )
+    return summaries
 
 
 def build_provisional_taxonomy(
     atdb: AutoTaxDB, sina_table: pd.DataFrame, source: str, prefix: str, version: str
 ) -> pd.DataFrame:
-    """Build a conservative sequence-level taxonomy table.
-
-    MVP behavior: sequence-level placeholders are allocated for each missing novel rank.
-    Cluster-level placeholder consolidation is represented in cluster_summary and can be
-    expanded in later versions.
-    """
+    """Build a conservative sequence-level taxonomy table."""
     rows = []
     for _, r in sina_table.iterrows():
         anchor_rank = r.get("anchor_rank") or None

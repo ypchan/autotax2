@@ -1,0 +1,266 @@
+diff --git a/autotax2/cli.py b/autotax2/cli.py
+index aeb6582..0000000 100644
+--- a/autotax2/cli.py
++++ b/autotax2/cli.py
+@@ -87,6 +87,14 @@ def add(
+     source: str = typer.Option(..., "--source", help="Required. Source name, e.g. midas."),
+     prefix: str = typer.Option(..., "--prefix", help="Required. Placeholder prefix for new lineages."),
+     threads: int = typer.Option(1, "--threads", "-t", help="Optional. CPU threads."),
++    group_jobs: int | None = typer.Option(
++        None,
++        "--group-jobs",
++        help=(
++            "Optional. Number of independent anchor groups to cluster concurrently. "
++            "Default: auto from --threads."
++        ),
++    ),
+     mode: str = typer.Option(
+         "incremental", "--mode", help="Optional. incremental or full. Default: incremental."
+     ),
+@@ -102,7 +110,7 @@ def add(
+       --db, --input, --source, --prefix
+ 
+     Optional:
+-      --threads, --mode, --keep-temp, --dry-run, --debug
++      --threads, --group-jobs, --mode, --keep-temp, --dry-run, --debug
+ 
+     Example:
+       autotax2 add \
+@@ -127,6 +135,7 @@ def add(
+         source=source,
+         prefix=prefix,
+         threads=threads,
++        group_jobs=group_jobs,
+         mode=mode,
+         keep_temp=keep_temp,
+         dry_run=dry_run,
+diff --git a/autotax2/core.py b/autotax2/core.py
+index 9e4fbdf..0000000 100644
+--- a/autotax2/core.py
++++ b/autotax2/core.py
+@@ -1,8 +1,11 @@
+ """Core AutoTax2 workflows."""
+ from __future__ import annotations
+ 
++from concurrent.futures import ThreadPoolExecutor, as_completed
+ import logging
++import os
+ from pathlib import Path
+-from typing import Dict
++from typing import Dict, Iterable
+ 
+ import pandas as pd
+ 
+@@ -46,6 +49,7 @@ def add_sequences(
+     prefix: str,
+     threads: int,
+     mode: str = "incremental",
++    group_jobs: int | None = None,
+     debug: bool = False,
+     keep_temp: bool = False,
+     dry_run: bool = False,
+@@ -115,8 +119,8 @@ def add_sequences(
+     # MVP grouping: group by anchor_rank + anchor taxonomy string; cluster all required novel ranks per group.
+     # For production-scale runs, groups can be processed independently in parallel.
+     cluster_summaries = []
+     seq_registry_new = []
+-    seq_lengths = {rec.id: rec.length for rec in parse_fasta(corrected)}
+-    for rec in parse_fasta(corrected):
++    corrected_records = list(parse_fasta(corrected))
++    for rec in corrected_records:
+         row = sina_table[sina_table["seq_id"] == rec.id]
+         if row.empty:
+             continue
+@@ -141,57 +145,119 @@ def add_sequences(
+         )
+ 
+     # Create placeholders for novel ranks per sequence cluster group. This MVP clusters each broad group;
+     # later optimization can batch groups and perform inheritance overlap checks.
++    cluster_groups = []
+     grouped = sina_table.groupby(["anchor_rank", "phylum", "class", "order", "family", "genus", "species"], dropna=False)
+     for group_key, group_df in grouped:
+         anchor_rank = group_key[0] or None
+         novel_ranks = novel_ranks_below_anchor(anchor_rank)
+         if not novel_ranks:
+             continue
+-        group_ids = set(group_df["seq_id"])
+-        group_fa = version_dir / "03_clusters" / f"group_{len(cluster_summaries)+1}.fa"
+-        records = [rec for rec in parse_fasta(corrected) if rec.id in group_ids]
+-        write_fasta(records, group_fa)
+         # Cluster fine-to-coarse novel ranks only: species -> genus -> ... up to rank below anchor.
+         novel_ranks_fine = [r for r in ["species", "genus", "family", "order", "class", "phylum"] if r in novel_ranks]
+         if novel_ranks_fine:
+-            res = hierarchical_cluster(
+-                group_fa,
+-                output_dir=version_dir / "03_clusters" / f"group_{len(cluster_summaries)+1}",
+-                ranks=novel_ranks_fine,
+-                thresholds_fraction=cfg.get("thresholds_fraction", DEFAULT_THRESHOLDS_FRACTION),
+-                threads=threads,
+-                iddef=cfg.get("vsearch", {}).get("iddef", 2),
+-                vsearch_bin=cfg.get("tools", {}).get("vsearch", "vsearch"),
+-                log_file=version_dir / "03_clusters" / "vsearch.cluster.log",
+-                dry_run=dry_run,
++            cluster_groups.append(
++                {
++                    "group_index": len(cluster_groups) + 1,
++                    "anchor_rank": anchor_rank,
++                    "seq_ids": set(group_df["seq_id"]),
++                    "novel_ranks_fine": novel_ranks_fine,
++                }
+             )
+-            for cr in res:
+-                mem = uc_membership(cr.uc_file, cr.rank)
+-                mem_out = version_dir / "03_clusters" / f"group_{len(cluster_summaries)+1}.{cr.rank}.membership.tsv"
+-                save_table(mem, mem_out)
+-                cluster_summaries.append(
+-                    {
+-                        "group": str(len(cluster_summaries) + 1),
+-                        "anchor_rank": anchor_rank or "",
+-                        "rank": cr.rank,
+-                        "threshold": cr.threshold,
+-                        "uc_file": str(cr.uc_file),
+-                        "centroids_fa": str(cr.centroids_fa),
+-                        "n_members": len(mem),
+-                    }
+-                )
++
++    if cluster_groups:
++        workers, threads_per_worker = resolve_group_parallelism(
++            group_count=len(cluster_groups), threads=threads, group_jobs=group_jobs
++        )
++        logger.info(
++            "Clustering %d anchor groups with %d worker(s), %d thread(s) per worker",
++            len(cluster_groups),
++            workers,
++            threads_per_worker,
++        )
++        cluster_summaries = run_cluster_groups(
++            groups=cluster_groups,
++            records=corrected_records,
++            version_dir=version_dir,
++            cfg=cfg,
++            threads_per_worker=threads_per_worker,
++            workers=workers,
++            dry_run=dry_run,
++        )
+ 
+     if seq_registry_new:
+         old = load_table(atdb.sequence_registry_path)
+@@ -257,6 +323,91 @@ def update_current_taxonomy(atdb: AutoTaxDB, new_tax: pd.DataFrame) -> None:
+     save_table(merged, atdb.current_taxonomy)
+ 
+ 
++def resolve_group_parallelism(
++    group_count: int, threads: int, group_jobs: int | None = None
++) -> tuple[int, int]:
++    """Choose anchor-group worker count without exceeding the requested CPU budget."""
++    if group_count <= 0:
++        return 0, 0
++    total_threads = max(1, int(threads or 1))
++    if group_jobs is None:
++        cpu_count = os.cpu_count() or total_threads
++        workers = min(group_count, total_threads, cpu_count)
++    else:
++        workers = min(group_count, total_threads, max(1, int(group_jobs)))
++    threads_per_worker = max(1, total_threads // workers)
++    return workers, threads_per_worker
++
++
++def run_cluster_groups(
++    groups: list[dict],
++    records: list[FastaRecord],
++    version_dir: Path,
++    cfg: dict,
++    threads_per_worker: int,
++    workers: int,
++    dry_run: bool,
++) -> list[dict]:
++    """Cluster independent anchor groups concurrently and return deterministic summaries."""
++    if workers <= 1:
++        summaries = []
++        for group in groups:
++            summaries.extend(
++                cluster_one_group(
++                    group=group,
++                    records=records,
++                    version_dir=version_dir,
++                    cfg=cfg,
++                    threads=threads_per_worker,
++                    dry_run=dry_run,
++                )
++            )
++        return summaries
++
++    results: dict[int, list[dict]] = {}
++    with ThreadPoolExecutor(max_workers=workers) as pool:
++        futures = {
++            pool.submit(
++                cluster_one_group,
++                group=group,
++                records=records,
++                version_dir=version_dir,
++                cfg=cfg,
++                threads=threads_per_worker,
++                dry_run=dry_run,
++            ): group["group_index"]
++            for group in groups
++        }
++        for future in as_completed(futures):
++            group_index = futures[future]
++            results[group_index] = future.result()
++
++    summaries = []
++    for group_index in sorted(results):
++        summaries.extend(results[group_index])
++    return summaries
++
++
++def cluster_one_group(
++    group: dict,
++    records: list[FastaRecord],
++    version_dir: Path,
++    cfg: dict,
++    threads: int,
++    dry_run: bool,
++) -> list[dict]:
++    group_index = int(group["group_index"])
++    group_ids = group["seq_ids"]
++    cluster_dir = version_dir / "03_clusters"
++    group_fa = cluster_dir / f"group_{group_index}.fa"
++    group_records = [rec for rec in records if rec.id in group_ids]
++    write_fasta(group_records, group_fa)
++
++    results = hierarchical_cluster(
++        group_fa,
++        output_dir=cluster_dir / f"group_{group_index}",
++        ranks=group["novel_ranks_fine"],
++        thresholds_fraction=cfg.get("thresholds_fraction", DEFAULT_THRESHOLDS_FRACTION),
++        threads=threads,
++        iddef=cfg.get("vsearch", {}).get("iddef", 2),
++        vsearch_bin=cfg.get("tools", {}).get("vsearch", "vsearch"),
++        log_file=cluster_dir / f"group_{group_index}.vsearch.cluster.log",
++        dry_run=dry_run,
++    )
++
++    summaries = []
++    for cr in results:
++        mem = uc_membership(cr.uc_file, cr.rank)
++        mem_out = cluster_dir / f"group_{group_index}.{cr.rank}.membership.tsv"
++        save_table(mem, mem_out)
++        summaries.append(
++            {
++                "group": str(group_index),
++                "anchor_rank": group["anchor_rank"] or "",
++                "rank": cr.rank,
++                "threshold": cr.threshold,
++                "uc_file": str(cr.uc_file),
++                "centroids_fa": str(cr.centroids_fa),
++                "n_members": len(mem),
++            }
++        )
++    return summaries
++
++
+ def rebuild_db(db: str | Path, threads: int, dry_run: bool = False) -> None:
+     atdb = AutoTaxDB(Path(db))
+     cfg = atdb.read_config()
