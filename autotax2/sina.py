@@ -5,11 +5,10 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable
 
 import pandas as pd
 
-from .fasta import FastaRecord, parse_fasta, strip_gaps_fasta
+from .fasta import parse_fasta, strip_gaps_fasta
 from .taxonomy import parse_tax_string
 from .utils import ensure_dir, run_command
 
@@ -53,8 +52,9 @@ def _to_int(value: str | None) -> int | None:
 def parse_sina_header(header: str) -> SinaAnnotation:
     """Parse SINA FASTA header fields.
 
-    AutoTax2 treats `*_slv` fields as reference fields when SINA is run against
-    user-provided `gtdb_ssu.arb`. Normalized `*_ref` fields are also accepted.
+    SINA may keep `*_slv` names even when the database is a user-provided
+    `gtdb_ssu.arb`. AutoTax2 treats those fields as reference metrics for the
+    current ARB run. Normalized `*_ref` fields are also accepted.
     """
     seq_id = header.split()[0]
     fields = {m.group(1): m.group(2) for m in HEADER_FIELD_RE.finditer(header)}
@@ -86,22 +86,54 @@ def run_sina(
     sina_bin: str = "sina",
     log_file: str | Path | None = None,
     dry_run: bool = False,
+    search_min_sim: float = 0.5,
+    search_max_result: int = 10,
+    lca_fields: str = "tax_slv,tax_gtdb",
+    lca_quorum: float = 0.7,
+    fs_req: int = 1,
+    fs_req_full: int = 0,
+    fs_msc: float = 0.5,
 ) -> Path:
+    """Run SINA with header metadata required by AutoTax2.
+
+    The options intentionally request identity, orientation, cutoff, and LCA
+    metadata in FASTA headers. Without these options AutoTax2 cannot reliably
+    infer anchor rank or detect reverse-complement orientation.
+    """
     output_fa = Path(output_fa)
     ensure_dir(output_fa.parent)
     cmd = [
         sina_bin,
         "-i",
         str(input_fa),
-        "-o",
-        str(output_fa),
-        "-r",
+        "--db",
         str(ref_arb),
+        "--search",
+        "--search-min-sim",
+        str(search_min_sim),
+        "--search-max-result",
+        str(search_max_result),
+        f"--lca-fields={lca_fields}",
+        "--lca-quorum",
+        str(lca_quorum),
+        "--show-conf",
         "--threads",
         str(threads),
+        "--fasta-write-dna",
+        "--turn",
+        "all",
+        "--calc-idty",
+        "--fs-req",
+        str(fs_req),
+        "--fs-req-full",
+        str(fs_req_full),
+        "--fs-msc",
+        str(fs_msc),
+        "--meta-fmt",
+        "header",
+        "-o",
+        str(output_fa),
     ]
-    if log_file:
-        cmd += ["--log-file", str(log_file)]
     run_command(cmd, log_path=log_file, dry_run=dry_run)
     return output_fa
 

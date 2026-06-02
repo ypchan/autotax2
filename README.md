@@ -5,49 +5,28 @@ keeps the GTDB-derived backbone stable, then adds downstream SSU datasets by
 orienting sequences with SINA, assigning a trusted GTDB anchor rank, clustering
 novel sequence pools with vsearch, and exporting classifier-ready references.
 
-The project is designed for reproducible reference construction: every database
-has durable registries, versioned dataset outputs, placeholder counters,
-cluster membership tables, and audit logs.
+## Workflow Map
+
+![AutoTax2 GTDB-anchored workflow](docs/images/autotax2-workflow.png)
+
+The workflow figure shows the two main phases: `autotax2 init` builds the
+GTDB-backed database, and `autotax2 add` aligns each new dataset with SINA,
+infers trusted anchor ranks, clusters novel groups with vsearch, updates
+registries, and writes exports.
 
 ## Core Ideas
 
 - GTDB-derived SSU taxonomy is the named backbone.
 - SINA runs against a user-built `gtdb_ssu.arb` file to orient query sequences
-  and emit alignment/LCA metadata.
+  and emit alignment, identity, orientation, and LCA metadata.
 - vsearch clusters only the novel lineage space below the trusted GTDB anchor
   rank.
 - Placeholder names are global within each rank and carry the first source
   prefix, for example `s__midas_s000001`.
 - Dataset FASTA inputs must already be extracted SSU/16S sequences. AutoTax2
   does not extract rRNA genes from genomes or contigs.
-- Export files are reproducible build artifacts for SINTAX, QIIME2, DADA2, and
-  plain taxonomy workflows.
-
-## Workflow Map
-
-```mermaid
-flowchart TD
-    A["GTDB SSU FASTA"] --> I["autotax2 init"]
-    B["GTDB taxonomy TSV"] --> I
-    C["GTDB SSU ARB"] --> I
-    I --> D["AutoTax2 database"]
-    E["new dataset SSU FASTA"] --> ADD["autotax2 add"]
-    D --> ADD
-    ADD --> SINA["SINA orientation and LCA"]
-    SINA --> ANCHOR["anchor rank inference"]
-    ANCHOR --> DEREP["vsearch dereplication"]
-    DEREP --> CLUSTER["rank-aware local clustering"]
-    CLUSTER --> TAX["current taxonomy and registries"]
-    TAX --> EXPORT["autotax2 export"]
-    EXPORT --> SINTAX["SINTAX FASTA"]
-    EXPORT --> QIIME["QIIME2 FASTA + taxonomy TSV"]
-    EXPORT --> DADA2["DADA2 FASTA"]
-    EXPORT --> TSV["flat taxonomy TSV"]
-```
 
 ## Installation
-
-Install AutoTax2 from a checkout:
 
 ```bash
 git clone https://github.com/ypchan/autotax2.git
@@ -58,87 +37,129 @@ python -m pip install -U pip
 python -m pip install -e ".[dev]"
 ```
 
-Check the Python package:
+Check the package and external tools:
 
 ```bash
 autotax2 --help
+sina --version
+vsearch --version
 pytest
 ruff check autotax2 tests
 ```
 
-## External Tools
-
-AutoTax2 calls external executables. They must be visible on `PATH` unless you
-store custom paths in the database configuration.
-
-```bash
-sina --version
-vsearch --version
-```
-
-Recommended versions:
+Recommended external tool versions:
 
 - SINA 1.7.2
 - vsearch 2.30.6 Linux x86_64 or newer compatible vsearch 2.x
 
-### SINA Command Role
+## SINA Command Requirements
 
-AutoTax2 uses SINA for query orientation and GTDB anchor inference. The internal
-command has this shape:
+AutoTax2 uses SINA for three things:
+
+1. orientation correction;
+2. reference identity and alignment quality calculation;
+3. LCA taxonomy metadata written into FASTA headers.
+
+A minimal alignment command is not enough. The command must request search,
+identity calculation, orientation reporting, LCA fields, DNA FASTA output, and
+header metadata. A representative command is:
 
 ```bash
 sina \
-  -i new_dataset.fa \
-  -o autotax2_db/versions/v001_source/01_sina/new.sina.aligned.fa \
-  -r autotax2_db/reference/gtdb_ssu.arb \
-  --threads 64 \
-  --log-file autotax2_db/versions/v001_source/01_sina/sina.log
+  -i bac.16s_rRNA.single_copy.fa \
+  --db /path/to/gtdb_ssu.arb \
+  --search \
+  --search-min-sim 0.5 \
+  --search-max-result 10 \
+  --lca-fields=tax_slv,tax_gtdb \
+  --lca-quorum 0.7 \
+  --show-conf \
+  --threads 48 \
+  --fasta-write-dna \
+  --turn all \
+  --calc-idty \
+  --fs-req 1 \
+  --fs-req-full 0 \
+  --fs-msc 0.5 \
+  --meta-fmt header \
+  -o bac.16s_rRNA.single_copy.sina.fa
 ```
 
-Expected SINA header fields include:
+Expected FASTA header shape:
 
 ```text
-[align_ident_slv=88.5] [align_quality_slv=90] [lca_tax_gtdb=d__Bacteria;p__...;] [turn=reversed and complemented]
+>ERR14064717_s_ERR14064717.1773379 [align_cutoff_head_slv=701] [align_cutoff_tail_slv=5] [align_ident_slv=60.1063843] [align_quality_slv=66] [aligned_slv=2026-05-22 10:58:37] [lca_tax_gtdb=Unclassified;] [lca_tax_slv=Unclassified;] [turn=reversed and complemented]
 ```
 
-SINA may emit names ending in `_slv` even when the reference is your
-`gtdb_ssu.arb`; AutoTax2 treats those as reference metrics in that situation.
-Normalized fields are also accepted:
+SINA may keep `_slv` suffixes even when the database is your custom
+`gtdb_ssu.arb`. In that case AutoTax2 treats `align_ident_slv`,
+`align_quality_slv`, `align_cutoff_head_slv`, and `align_cutoff_tail_slv` as
+reference metrics from the GTDB ARB run. Normalized fields such as
+`align_ident_ref`, `align_quality_ref`, and `lca_tax_ref` are also accepted.
+
+Important SINA options:
+
+| option | why it matters |
+|---|---|
+| `--db gtdb_ssu.arb` | Uses the custom GTDB ARB reference database. |
+| `--search` | Runs reference search so LCA fields can be calculated. |
+| `--search-min-sim 0.5` | Keeps distant candidates for high-rank anchoring. |
+| `--search-max-result 10` | Limits candidates used for LCA. |
+| `--lca-fields=tax_slv,tax_gtdb` | Requests taxonomy fields from ARB entries. |
+| `--lca-quorum 0.7` | Requires 70 percent agreement for reported LCA. |
+| `--show-conf` | Includes confidence metadata when SINA can report it. |
+| `--fasta-write-dna` | Writes DNA FASTA output. |
+| `--turn all` | Allows reverse-complement detection and reports `[turn=...]`. |
+| `--calc-idty` | Calculates `align_ident_*`, required for anchor rank inference. |
+| `--fs-req 1` | Enables flexible search behavior. |
+| `--fs-req-full 0` | Avoids requiring full-length search behavior. |
+| `--fs-msc 0.5` | Sets flexible-search minimum similarity. |
+| `--meta-fmt header` | Writes metadata into FASTA headers for AutoTax2 parsing. |
+
+If identity, quality, cutoff, LCA, or orientation fields are missing, first
+check that `--calc-idty`, `--turn all`, `--lca-fields=...`, and
+`--meta-fmt header` were used.
+
+## Custom GTDB ARB Taxonomy Fields
+
+The custom `gtdb_ssu.arb` must contain per-sequence taxonomy fields if SINA is
+expected to emit `lca_tax_gtdb` or `lca_tax_slv`. The ARB topology and aligned
+sequences alone are not enough. If the ARB entries do not have taxonomy
+annotation fields, SINA can still orient and align sequences, but LCA taxonomy
+headers will be empty or `Unclassified`.
+
+Recommended input table:
 
 ```text
-[align_ident_ref=88.5] [align_quality_ref=90] [lca_tax_ref=d__Bacteria;p__...;]
+seq_id    tax_gtdb
+GCF_000001.1_16S    d__Bacteria;p__Pseudomonadota;c__Gammaproteobacteria;o__...;f__...;g__...;s__...
 ```
 
-### vsearch Command Roles
+Recommended ARB fields:
 
-AutoTax2 uses vsearch for dereplication and clustering.
+```text
+tax_gtdb = d__Bacteria;p__...;s__...
+tax_slv  = d__Bacteria;p__...;s__...
+```
 
-Dereplication:
+`tax_gtdb` is the semantically correct field for AutoTax2. Mirroring the same
+taxonomy into `tax_slv` is useful because SINA examples and older metadata names
+often expect `tax_slv`.
+
+After building or post-processing the ARB, run SINA with:
 
 ```bash
-vsearch \
-  --derep_fulllength new.sina.corrected.fa \
-  --output new.derep.fa \
-  --uc new.derep.uc \
-  --sizeout \
-  --threads 64
+--lca-fields=tax_slv,tax_gtdb --meta-fmt header
 ```
 
-Rank clustering:
+Then confirm the output FASTA contains:
 
-```bash
-vsearch \
-  --cluster_fast group_1.fa \
-  --id 0.972 \
-  --iddef 2 \
-  --strand plus \
-  --centroids species.centroids.fa \
-  --uc species.uc \
-  --threads 16
+```text
+[lca_tax_gtdb=d__Bacteria;p__...;]
 ```
 
-`--iddef 2` is the default identity definition and should remain fixed unless a
-run explicitly documents a different scientific reason.
+The critical invariant is that ARB sequence IDs, reference FASTA IDs, and
+taxonomy TSV `seq_id` values match exactly.
 
 ## Quick Start
 
@@ -148,13 +169,11 @@ run explicitly documents a different scientific reason.
 autotax2 check --debug
 ```
 
-Parameters:
-
 | parameter | default | meaning |
 |---|---:|---|
 | `--sina-bin` | `sina` | SINA executable name or path. |
 | `--vsearch-bin` | `vsearch` | vsearch executable name or path. |
-| `--debug` | `False` | Print debug logs and include external command output in logs. |
+| `--debug` | `False` | Enable debug logging. |
 
 ### 2. Initialize a GTDB Backbone Database
 
@@ -168,37 +187,26 @@ autotax2 init \
   --debug
 ```
 
-Parameters:
-
 | parameter | required | meaning |
 |---|---:|---|
-| `--ref-fa` | yes | GTDB-derived SSU reference FASTA. Sequence IDs must match `seq_id` in the taxonomy TSV. |
-| `--ref-tax` | yes | GTDB-derived taxonomy TSV with one row per reference sequence. |
-| `--ref-arb` | yes | SINA-compatible ARB file built from the same GTDB SSU reference. |
+| `--ref-fa` | yes | GTDB-derived SSU reference FASTA. IDs must match `seq_id`. |
+| `--ref-tax` | yes | GTDB taxonomy TSV with one row per reference sequence. |
+| `--ref-arb` | yes | SINA-compatible ARB file with taxonomy fields. |
 | `--db` | yes | Output AutoTax2 database directory. |
-| `--threads`, `-t` | no | CPU thread budget recorded in `config.yaml` and used by long-running commands. |
-| `--force` | no | Delete and rebuild an existing non-empty database directory. Use carefully. |
-| `--debug` | no | Enable debug logging for initialization. |
+| `--threads`, `-t` | no | CPU thread budget recorded in `config.yaml`. |
+| `--force` | no | Rebuild an existing non-empty database directory. |
+| `--debug` | no | Enable debug logging. |
 
-Required columns in `gtdb_ssu.taxonomy.tsv`:
+Required taxonomy TSV columns:
 
 ```text
 seq_id    domain    phylum    class    order    family    genus    species
-```
-
-Optional columns are preserved when present:
-
-```text
-evidence_level    source    length
 ```
 
 Important outputs:
 
 ```text
 autotax2_db/config.yaml
-autotax2_db/reference/gtdb_ssu_tax.fa
-autotax2_db/reference/gtdb_ssu.taxonomy.tsv
-autotax2_db/reference/gtdb_ssu.arb
 autotax2_db/reference/current.fa
 autotax2_db/reference/current.taxonomy.tsv
 autotax2_db/registry/sequence_registry.tsv
@@ -223,37 +231,22 @@ autotax2 add \
   --debug
 ```
 
-Parameters:
+![AutoTax2 add workflow](docs/images/autotax2-add-workflow.png)
 
 | parameter | required | meaning |
 |---|---:|---|
 | `--db` | yes | Existing AutoTax2 database directory. |
 | `--input` | yes | New dataset FASTA containing externally extracted SSU/16S sequences. |
-| `--source` | yes | Human-readable source name, for example `midas`, `mfd`, or `hifimeta`. |
-| `--prefix` | yes | Stable placeholder prefix for new lineages created first by this source. |
-| `--threads`, `-t` | no | Total CPU thread budget for SINA, vsearch dereplication, and clustering. |
-| `--group-jobs` | no | Number of independent anchor groups to cluster concurrently. Default is automatic from `--threads`. |
-| `--mode` | no | `incremental` or `full`. Current default is `incremental`. |
-| `--keep-temp` | no | Keep intermediate files. Useful for debugging SINA and vsearch behavior. |
-| `--dry-run` | no | Validate paths and print external commands without running downstream table generation. |
+| `--source` | yes | Source name, for example `midas`, `mfd`, or `hifimeta`. |
+| `--prefix` | yes | Stable placeholder prefix for new lineages created by this source. |
+| `--threads`, `-t` | no | Total CPU thread budget for SINA, dereplication, and clustering. |
+| `--group-jobs` | no | Independent anchor groups to cluster concurrently. |
+| `--mode` | no | `incremental` or `full`; default is `incremental`. |
+| `--keep-temp` | no | Keep intermediate files for debugging. |
+| `--dry-run` | no | Print external commands without running downstream generation. |
 | `--debug` | no | Enable detailed logs. |
 
-Add workflow:
-
-```mermaid
-flowchart LR
-    A["input FASTA"] --> B["SINA aligned FASTA"]
-    B --> C["gap-stripped corrected FASTA"]
-    B --> D["sina_annotation.tsv"]
-    C --> E["vsearch derep"]
-    D --> F["anchor groups"]
-    F --> G["parallel group clustering"]
-    G --> H["cluster_summary.tsv"]
-    D --> I["provisional_taxonomy.tsv"]
-    I --> J["reference/current.taxonomy.tsv"]
-```
-
-Important outputs for one dataset:
+Important dataset outputs:
 
 ```text
 autotax2_db/versions/v001_midas/01_sina/new.sina.aligned.fa
@@ -301,9 +294,6 @@ g__midas_g000001
 g__hifimeta_g000002
 ```
 
-The number is not reset for each source. Retired or deprecated IDs must never be
-reused.
-
 ## Export References
 
 ```bash
@@ -313,13 +303,11 @@ autotax2 export \
   --out export/
 ```
 
-Parameters:
-
 | parameter | required | meaning |
 |---|---:|---|
 | `--db` | yes | Existing AutoTax2 database directory. |
-| `--format` | yes/no | One of `all`, `sintax`, `dada2`, `qiime2`, or `taxonomy`. Default is `all`. |
-| `--out` | yes | Output file or directory. Use a directory for `all` and `qiime2`. |
+| `--format` | no | `all`, `sintax`, `dada2`, `qiime2`, or `taxonomy`. |
+| `--out` | yes | Output file or directory. |
 | `--debug` | no | Enable export logs. |
 
 Export outputs:
@@ -332,110 +320,34 @@ export/autotax2.qiime2-taxonomy.tsv
 export/autotax2.taxonomy.tsv
 ```
 
-## Rebuild
-
-```bash
-autotax2 rebuild \
-  --db autotax2_db \
-  --threads 64 \
-  --debug
-```
-
-Parameters:
-
-| parameter | required | meaning |
-|---|---:|---|
-| `--db` | yes | Existing AutoTax2 database directory. |
-| `--threads`, `-t` | no | CPU threads for each vsearch rank-clustering step. |
-| `--dry-run` | no | Print commands without running vsearch. |
-| `--debug` | no | Enable debug logs. |
-
-Rebuild is rank-sequential by design: species centroids feed genus clustering,
-genus centroids feed family clustering, and so on. vsearch can still use many
-threads within each rank.
-
-## Summarize Source Overlap
-
-```bash
-autotax2 summarize \
-  --db autotax2_db \
-  --rank species \
-  --out species.summary.tsv
-```
-
-Parameters:
-
-| parameter | required | meaning |
-|---|---:|---|
-| `--db` | yes | Existing AutoTax2 database directory. |
-| `--rank` | no | Rank to summarize: `species`, `genus`, `family`, `order`, `class`, or `phylum`. |
-| `--out` | no | Optional TSV output path. |
-| `--debug` | no | Enable debug logs. |
-
 ## Threading and Performance
 
-`--threads` is the total thread budget that AutoTax2 passes to external tools.
-SINA and dereplication usually run as one external process and receive the full
-budget.
+`--threads` is the total thread budget. SINA and dereplication usually run as
+one external process and receive the full budget.
 
-The expensive `add` step can contain many independent anchor groups. Those
-groups are safe to cluster concurrently because each group is defined by its
-trusted anchor context and writes separate FASTA, UC, centroid, membership, and
-log files.
+During `add`, independent anchor groups can be clustered concurrently because
+their input FASTA files and output paths are separate. Rank steps inside one
+group remain sequential because species centroids feed genus clustering, genus
+centroids feed family clustering, and so on.
 
 Recommended strategy:
 
 ```text
 few huge anchor groups:
-  use --group-jobs 1 or 2, keep more threads per vsearch process
+  --group-jobs 1 or 2
 
 many small or medium anchor groups:
-  use automatic --group-jobs, or set 4 to 16 on large servers
+  --group-jobs 4 to 16 on large servers
 
-multiple AutoTax2 runs on the same server:
-  lower --threads or --group-jobs to avoid oversubscription
+shared server:
+  lower --threads or --group-jobs to avoid CPU oversubscription
 ```
 
-The safe parallel budget is:
+Budget rule:
 
 ```text
 group_jobs <= threads
 threads_per_group = max(1, floor(threads / group_jobs))
-```
-
-This keeps the total vsearch CPU request close to the user-provided thread
-budget while avoiding idle cores when individual anchor groups are small.
-
-## Database Layout
-
-```text
-autotax2_db/
-  config.yaml
-  reference/
-    current.fa
-    current.taxonomy.tsv
-    gtdb_ssu_tax.fa
-    gtdb_ssu.taxonomy.tsv
-    gtdb_ssu.arb
-  registry/
-    sequence_registry.tsv
-    cluster_registry.tsv
-    placeholder_counter.tsv
-    source_registry.tsv
-  clusters/
-    species.membership.tsv
-    genus.membership.tsv
-    ...
-  versions/
-    v001_midas/
-      01_sina/
-      02_derep/
-      03_clusters/
-      sina_annotation.tsv
-      cluster_summary.tsv
-      provisional_taxonomy.tsv
-  logs/
-  export/
 ```
 
 ## Development
@@ -445,10 +357,3 @@ python -m pip install -e ".[dev]"
 pytest
 ruff check autotax2 tests
 ```
-
-When changing user-facing behavior, keep these in sync:
-
-- CLI option definitions and help text
-- README command examples
-- tests for parsing, registries, and export format compatibility
-- `AGENTS.md` project rules

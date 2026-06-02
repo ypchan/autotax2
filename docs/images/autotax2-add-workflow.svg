@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="780" viewBox="0 0 1400 780" role="img" aria-labelledby="title desc">
+  <title id="title">AutoTax2 add workflow</title>
+  <desc id="desc">Detailed add workflow from dataset FASTA through SINA metadata, anchor inference, dereplication, parallel group clustering, and taxonomy update.</desc>
+  <rect width="1400" height="780" fill="#fbfcfd"/>
+  <text x="700" y="56" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#17324d">autotax2 add workflow</text>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#526b84"/>
+    </marker>
+    <style>
+      .box{fill:#ffffff;stroke:#9cafbf;stroke-width:2;rx:10}
+      .input{fill:#eef7f1;stroke:#67a978}
+      .sina{fill:#eef5ff;stroke:#648fc3}
+      .vsearch{fill:#fff7e8;stroke:#c69a47}
+      .out{fill:#f4f0ff;stroke:#8b78bf}
+      .label{font-family:Arial,sans-serif;font-size:18px;font-weight:700;fill:#1d3042}
+      .small{font-family:Arial,sans-serif;font-size:14px;fill:#526170}
+      .arrow{stroke:#526b84;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect x="45" y="150" width="185" height="84" class="box input"/>
+  <text x="137" y="183" text-anchor="middle" class="label">Dataset FASTA</text>
+  <text x="137" y="210" text-anchor="middle" class="small">SSU/16S only</text>
+  <rect x="285" y="150" width="205" height="84" class="box sina"/>
+  <text x="387" y="183" text-anchor="middle" class="label">SINA search</text>
+  <text x="387" y="210" text-anchor="middle" class="small">--search --turn all</text>
+  <path d="M230 192 L285 192" class="arrow"/>
+  <rect x="545" y="115" width="245" height="154" class="box sina"/>
+  <text x="667" y="149" text-anchor="middle" class="label">FASTA header metadata</text>
+  <text x="667" y="181" text-anchor="middle" class="small">align_ident</text>
+  <text x="667" y="206" text-anchor="middle" class="small">align_quality</text>
+  <text x="667" y="231" text-anchor="middle" class="small">cutoff_head/tail, LCA, turn</text>
+  <path d="M490 192 L545 192" class="arrow"/>
+  <rect x="850" y="150" width="205" height="84" class="box sina"/>
+  <text x="952" y="183" text-anchor="middle" class="label">Anchor rank</text>
+  <text x="952" y="210" text-anchor="middle" class="small">GTDB LCA + identity</text>
+  <path d="M790 192 L850 192" class="arrow"/>
+  <rect x="1110" y="150" width="220" height="84" class="box vsearch"/>
+  <text x="1220" y="183" text-anchor="middle" class="label">vsearch derep</text>
+  <text x="1220" y="210" text-anchor="middle" class="small">unique sequence pool</text>
+  <path d="M1055 192 L1110 192" class="arrow"/>
+  <rect x="145" y="385" width="230" height="94" class="box vsearch"/>
+  <text x="260" y="420" text-anchor="middle" class="label">Split by anchor</text>
+  <text x="260" y="448" text-anchor="middle" class="small">independent contexts</text>
+  <path d="M1220 234 C1220 330 365 330 260 385" class="arrow"/>
+  <rect x="445" y="385" width="270" height="94" class="box vsearch"/>
+  <text x="580" y="420" text-anchor="middle" class="label">Parallel group clustering</text>
+  <text x="580" y="448" text-anchor="middle" class="small">--group-jobs within --threads</text>
+  <path d="M375 432 L445 432" class="arrow"/>
+  <rect x="785" y="385" width="255" height="94" class="box out"/>
+  <text x="912" y="420" text-anchor="middle" class="label">provisional_taxonomy.tsv</text>
+  <text x="912" y="448" text-anchor="middle" class="small">new sequence taxonomy</text>
+  <path d="M715 432 L785 432" class="arrow"/>
+  <rect x="1110" y="385" width="240" height="94" class="box out"/>
+  <text x="1230" y="420" text-anchor="middle" class="label">current.taxonomy.tsv</text>
+  <text x="1230" y="448" text-anchor="middle" class="small">database update</text>
+  <path d="M1040 432 L1110 432" class="arrow"/>
+  <rect x="445" y="585" width="610" height="88" class="box"/>
+  <text x="750" y="621" text-anchor="middle" class="label">Accuracy boundary</text>
+  <text x="750" y="650" text-anchor="middle" class="small">rank steps inside one group stay sequential; placeholder and registry writes stay ordered</text>
+</svg>

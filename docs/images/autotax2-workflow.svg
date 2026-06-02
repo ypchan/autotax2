@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="780" viewBox="0 0 1400 780" role="img" aria-labelledby="title desc">
+  <title id="title">AutoTax2 GTDB-anchored workflow</title>
+  <desc id="desc">Workflow from GTDB inputs to AutoTax2 database, SINA annotation, vsearch clustering, registries, and exports.</desc>
+  <rect width="1400" height="780" fill="#f7faf9"/>
+  <text x="700" y="56" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="700" fill="#17324d">AutoTax2 GTDB-anchored workflow</text>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#54708a"/>
+    </marker>
+    <style>
+      .box{fill:#ffffff;stroke:#9bb0c3;stroke-width:2;rx:10}
+      .input{fill:#eef7f1;stroke:#6aa77a}
+      .process{fill:#eff5fb;stroke:#6b90b8}
+      .output{fill:#fff7e8;stroke:#c99a45}
+      .label{font-family:Arial,sans-serif;font-size:19px;font-weight:700;fill:#1c2f3f}
+      .small{font-family:Arial,sans-serif;font-size:15px;fill:#516273}
+      .arrow{stroke:#54708a;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect x="60" y="120" width="230" height="86" class="box input"/>
+  <text x="175" y="154" text-anchor="middle" class="label">GTDB SSU FASTA</text>
+  <text x="175" y="181" text-anchor="middle" class="small">reference sequences</text>
+  <rect x="60" y="240" width="230" height="86" class="box input"/>
+  <text x="175" y="274" text-anchor="middle" class="label">GTDB taxonomy TSV</text>
+  <text x="175" y="301" text-anchor="middle" class="small">7 rank table</text>
+  <rect x="60" y="360" width="230" height="86" class="box input"/>
+  <text x="175" y="394" text-anchor="middle" class="label">gtdb_ssu.arb</text>
+  <text x="175" y="421" text-anchor="middle" class="small">SINA database</text>
+  <rect x="360" y="240" width="210" height="86" class="box process"/>
+  <text x="465" y="274" text-anchor="middle" class="label">autotax2 init</text>
+  <text x="465" y="301" text-anchor="middle" class="small">build stable DB</text>
+  <path d="M290 163 C322 163 322 265 360 265" class="arrow"/>
+  <path d="M290 283 L360 283" class="arrow"/>
+  <path d="M290 403 C322 403 322 301 360 301" class="arrow"/>
+  <rect x="640" y="240" width="220" height="86" class="box output"/>
+  <text x="750" y="274" text-anchor="middle" class="label">AutoTax2 DB</text>
+  <text x="750" y="301" text-anchor="middle" class="small">reference + registries</text>
+  <path d="M570 283 L640 283" class="arrow"/>
+  <rect x="60" y="575" width="230" height="86" class="box input"/>
+  <text x="175" y="609" text-anchor="middle" class="label">Dataset SSU FASTA</text>
+  <text x="175" y="636" text-anchor="middle" class="small">externally extracted</text>
+  <rect x="360" y="575" width="210" height="86" class="box process"/>
+  <text x="465" y="609" text-anchor="middle" class="label">autotax2 add</text>
+  <text x="465" y="636" text-anchor="middle" class="small">incremental update</text>
+  <path d="M290 618 L360 618" class="arrow"/>
+  <path d="M750 326 C750 480 570 500 520 575" class="arrow"/>
+  <rect x="640" y="510" width="230" height="86" class="box process"/>
+  <text x="755" y="544" text-anchor="middle" class="label">SINA metadata</text>
+  <text x="755" y="571" text-anchor="middle" class="small">identity, LCA, turn</text>
+  <path d="M570 618 C610 618 610 553 640 553" class="arrow"/>
+  <rect x="930" y="510" width="230" height="86" class="box process"/>
+  <text x="1045" y="544" text-anchor="middle" class="label">vsearch clustering</text>
+  <text x="1045" y="571" text-anchor="middle" class="small">parallel anchor groups</text>
+  <path d="M870 553 L930 553" class="arrow"/>
+  <rect x="930" y="360" width="230" height="86" class="box output"/>
+  <text x="1045" y="394" text-anchor="middle" class="label">Registries</text>
+  <text x="1045" y="421" text-anchor="middle" class="small">current taxonomy</text>
+  <path d="M1045 510 L1045 446" class="arrow"/>
+  <rect x="1210" y="360" width="140" height="180" class="box output"/>
+  <text x="1280" y="397" text-anchor="middle" class="label">Exports</text>
+  <text x="1280" y="431" text-anchor="middle" class="small">SINTAX</text>
+  <text x="1280" y="461" text-anchor="middle" class="small">QIIME2</text>
+  <text x="1280" y="491" text-anchor="middle" class="small">DADA2</text>
+  <text x="1280" y="521" text-anchor="middle" class="small">TSV</text>
+  <path d="M1160 403 L1210 403" class="arrow"/>
+</svg>
